@@ -11,15 +11,50 @@ import traceback
 import qtmodern.styles
 import qtmodern.windows
 from PyQt5 import QtWidgets as qtw
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QThread, pyqtSignal
 
 from selenium import webdriver
 from selenium.webdriver.common.by import By
+from selenium.common.exceptions import UnexpectedAlertPresentException
 import requests
-import sys
 import time
 from twocaptcha.solver import TwoCaptcha
 
+import random
+
+# 한글 초성, 중성, 종성 리스트
+chosung = ['ㄱ', 'ㄲ', 'ㄴ', 'ㄷ', 'ㄸ', 'ㄹ', 'ㅁ', 'ㅂ', 'ㅃ', 'ㅅ', 'ㅆ', 'ㅇ', 'ㅈ', 'ㅉ', 'ㅊ', 'ㅋ', 'ㅌ', 'ㅍ', 'ㅎ']
+jungsung = ['ㅏ', 'ㅐ', 'ㅑ', 'ㅒ', 'ㅓ', 'ㅔ', 'ㅕ', 'ㅖ', 'ㅗ', 'ㅘ', 'ㅙ', 'ㅚ', 'ㅛ', 'ㅜ', 'ㅝ', 'ㅞ', 'ㅟ', 'ㅠ', 'ㅡ', 'ㅢ', 'ㅣ']
+jongsung = [''] + ['ㄱ', 'ㄲ', 'ㄳ', 'ㄴ', 'ㄵ', 'ㄶ', 'ㄷ', 'ㄹ', 'ㄺ', 'ㄻ', 'ㄼ', 'ㄽ', 'ㄾ', 'ㄿ', 'ㅀ', 'ㅁ', 'ㅂ', 'ㅄ', 'ㅅ', 'ㅆ', 'ㅇ', 'ㅈ', 'ㅊ', 'ㅋ', 'ㅌ', 'ㅍ', 'ㅎ']
+
+def generate_korean_name():
+    name_length = random.choice([3, 4])  # 이름 길이를 3 또는 4로 랜덤하게 선택
+    name = ''
+
+    for _ in range(name_length):
+        ch = random.choice(chosung)
+        ju = random.choice(jungsung)
+        jo = random.choice(jongsung)
+        # 한글 유니코드 생성
+        name += chr(0xAC00 + (chosung.index(ch) * 588) + (jungsung.index(ju) * 28) + jongsung.index(jo))
+
+    return name
+
+
+def generate_korean_phone_number():
+    # 010-으로 시작
+    phone_number = "010-"
+
+    # 중간 4자리 숫자 생성
+    middle_four_digits = ''.join([str(random.randint(0, 9)) for _ in range(4)])
+
+    # 마지막 4자리 숫자 생성
+    last_four_digits = ''.join([str(random.randint(0, 9)) for _ in range(4)])
+
+    # 전체 전화번호 조합
+    phone_number += f"{middle_four_digits}-{last_four_digits}"
+
+    return phone_number
 
 api_key = '37f1af7f0d286cd9ad65892446c64ab7'
 solver = TwoCaptcha(api_key, defaultTimeout=30, pollingInterval=5)
@@ -85,6 +120,132 @@ def write_api_count(count, filename='api_count.json'):
         json.dump(data, file)
 
 
+class Worker(QThread):
+    progress_updated = pyqtSignal(int)
+    log_updated = pyqtSignal(str)
+    api_count_updated = pyqtSignal(int)
+
+    def __init__(self, urls, title, content):
+        super().__init__()
+        self.urls = urls
+        self.title = title
+        self.content = content
+        self.api_count = read_api_count()
+        self.driver = None
+
+    def init_web_driver(self):
+        try:
+            options = webdriver.ChromeOptions()
+            options.add_argument("--start-maximized")
+            options.add_argument(
+                "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
+            self.driver = webdriver.Chrome(options=options)
+        except Exception as e:
+            print_with_debug(e)
+
+    def run(self):
+        self.init_web_driver()
+        for i, url in enumerate(self.urls):
+            try:
+                self.driver.get(url)
+                self.log_updated.emit(f'[{url}] 사이트 이동')
+                self.driver.implicitly_wait(3)
+
+                # Wrapping find_element with try-except to handle missing elements
+                try:
+                    name_box = self.driver.find_element(By.CSS_SELECTOR, "#wr_name")
+                    name_box.send_keys(generate_korean_name())
+                except Exception as e:
+                    self.log_updated.emit(f'[{url}] 이름 입력 요소를 찾을 수 없습니다.')
+
+                try:
+                    phone_box = self.driver.find_element(By.CSS_SELECTOR, "#wr_homepage")
+                    phone_box.send_keys(generate_korean_phone_number())
+                except Exception as e:
+                    self.log_updated.emit(f'[{url}] 전화번호 입력 요소를 찾을 수 없습니다.')
+
+                try:
+                    password_box = self.driver.find_element(By.CSS_SELECTOR, "#wr_password")
+                    password_box.send_keys("password1")
+                except Exception as e:
+                    self.log_updated.emit(f'[{url}] 비밀번호 입력 요소를 찾을 수 없습니다.')
+
+                try:
+                    subject_box = self.driver.find_element(By.CSS_SELECTOR, "#wr_subject")
+                    subject_box.send_keys(self.title)
+                except Exception as e:
+                    self.log_updated.emit(f'[{url}] 제목 입력 요소를 찾을 수 없습니다.')
+
+                try:
+                    content_box = self.driver.find_element(By.CSS_SELECTOR, "#wr_content")
+                    content_box.send_keys(self.content)
+                except Exception as e:
+                    self.log_updated.emit(f'[{url}] 본문 입력 요소를 찾을 수 없습니다.')
+
+                try:
+                    email_box = self.driver.find_element(By.CSS_SELECTOR, "#wr_email")
+                    email_box.send_keys("test@naver.com")
+                except Exception as e:
+                    self.log_updated.emit(f'[{url}] 이메일 입력 요소를 찾을 수 없습니다.')
+
+                self.log_updated.emit(f'[{url}] 정보입력 완료')
+                self.write_contents(url)
+                self.progress_updated.emit(i + 1)
+                self.driver.quit()
+                self.init_web_driver()
+            except UnexpectedAlertPresentException as e:
+                self.driver.quit()
+                self.log_updated.emit(f'[{url}] 경고창 감지')
+                self.init_web_driver()
+            except Exception as e:
+                print_with_debug(e)
+        self.driver.quit()
+
+    def write_contents(self, url):
+        try:
+            captcha_img = self.driver.find_element(By.CSS_SELECTOR, "#captcha_img")
+            captcha_url = captcha_img.get_attribute("src")
+            cookies = self.driver.get_cookies()
+
+            session = requests.Session()
+            for cookie in cookies:
+                session.cookies.set(cookie['name'], cookie['value'])
+
+            response = session.get(captcha_url, headers={
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            })
+
+            if response.status_code == 200:
+                with open("captcha.jpg", "wb") as file:
+                    file.write(response.content)
+                try:
+                    result = solver.normal('captcha.jpg')
+                except Exception as e:
+                    sys.exit(e)
+                else:
+                    self.api_count += 1
+                    self.api_count_updated.emit(self.api_count)
+                    write_api_count(self.api_count)
+                    number = result['code']
+                    self.log_updated.emit(f'[{url}] 캡챠 인식 완료 : {number}')
+
+                    captcha_box = self.driver.find_element(By.CSS_SELECTOR, "#captcha_key")
+                    captcha_box.send_keys(number)
+
+                    try:
+                        submit_button = self.driver.find_element(By.CSS_SELECTOR, "#btn_submit")
+                        submit_button.click()
+                        self.log_updated.emit(f'[{url}] 글쓰기 작성 완료')
+                    except UnexpectedAlertPresentException as e:
+                        self.driver.quit()
+                        self.log_updated.emit(f'[{url}] 경고창 감지')
+                        self.init_web_driver()
+                    except Exception as e:
+                        print_with_debug(e)
+        except Exception as e:
+            print_with_debug(e)
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -106,7 +267,7 @@ class MainWindow(QMainWindow):
         self.count_label = None
         self.init_ui()
         self.update_list()
-        self.driver = None
+        self.worker = None
 
     def init_ui(self):
         try:
@@ -189,101 +350,21 @@ class MainWindow(QMainWindow):
         self.log_edit_box.append(formatted_log)
         self.log_edit_box.verticalScrollBar().setValue(self.log_edit_box.verticalScrollBar().maximum())
 
-    def init_web_driver(self):
-        try:
-            options = webdriver.ChromeOptions()
-            options.add_argument("--start-maximized")  # 브라우저 최대화 옵션 추가
-            options.add_argument(
-                "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
-            self.driver = webdriver.Chrome(options=options)
-        except Exception as e:
-            print_with_debug(e)
-
     def on_write_button_click(self):
-        try:
-            self.init_web_driver()
-            urls = self.get_all_urls()
+        urls = self.get_all_urls()
+        self.progress_bar.setMaximum(len(urls))
+        self.worker = Worker(urls, self.title, self.content)
+        self.worker.progress_updated.connect(self.update_progress)
+        self.worker.log_updated.connect(self.add_log)
+        self.worker.api_count_updated.connect(self.update_api_count)
+        self.worker.start()
 
-            for url in urls:
-                try:
-                    self.driver.get(url)
-                    self.add_log(f'[{url}] 사이트 이동')
-                    self.driver.implicitly_wait(3)
-                    name_box = self.driver.find_element(By.CSS_SELECTOR, "#wr_name")
-                    name_box.send_keys("홍길동")
+    def update_progress(self, value):
+        self.progress_bar.setValue(value)
 
-                    phone_box = self.driver.find_element(By.CSS_SELECTOR, "#wr_homepage")
-                    phone_box.send_keys("010-1234-5678")
-
-                    password_box = self.driver.find_element(By.CSS_SELECTOR, "#wr_password")
-                    password_box.send_keys("password1")
-
-                    subject_box = self.driver.find_element(By.CSS_SELECTOR, "#wr_subject")
-                    subject_box.send_keys(self.title)
-
-                    content_box = self.driver.find_element(By.CSS_SELECTOR, "#wr_content")
-                    content_box.send_keys(self.content)
-
-                    email_box = self.driver.find_element(By.CSS_SELECTOR, "#wr_email")
-                    email_box.send_keys("test@naver.com")
-
-                    self.add_log(f'[{url}] 정보입력 완료')
-
-                    time.sleep(5)
-                    self.write_contents(url)
-                    time.sleep(5)
-                except Exception as e:
-                    print_with_debug(e)
-
-        except Exception as e:
-            print_with_debug(e)
-
-    def write_contents(self, url):
-        try:
-            self.driver.implicitly_wait(10)
-
-            # 캡차 이미지 요소 찾기
-            captcha_img = self.driver.find_element(By.CSS_SELECTOR, "#captcha_img")
-            captcha_url = captcha_img.get_attribute("src")
-            cookies = self.driver.get_cookies()
-
-            # requests 세션 생성
-            session = requests.Session()
-
-            # Selenium 쿠키를 requests 쿠키로 복사
-            for cookie in cookies:
-                session.cookies.set(cookie['name'], cookie['value'])
-
-            response = session.get(captcha_url, headers={
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-            })
-
-            if response.status_code == 200:
-
-                # 파일을 바이너리 모드로 열고 저장
-                with open("captcha.jpg", "wb") as file:
-                    file.write(response.content)
-                try:
-                    result = solver.normal('captcha.jpg')
-                except Exception as e:
-                    sys.exit(e)
-                else:
-                    self.api_count += 1
-                    self.count_label.setText(f"누적 캡챠 호출 횟수 : {self.api_count}")
-                    write_api_count(self.api_count)
-                    number = result['code']
-                    self.add_log(f'[{url}] 캡챠 인식 완료 : {number}')
-
-                    captcha_box = self.driver.find_element(By.CSS_SELECTOR, "#captcha_key")
-                    captcha_box.send_keys(number)
-
-                    # btn_submit
-                    submit_button = self.driver.find_element(By.CSS_SELECTOR, "#btn_submit")
-                    submit_button.click()
-                    self.add_log(f'[{url}] 글쓰기 작성 완료')
-
-        except Exception as e:
-            print_with_debug(e)
+    def update_api_count(self, count):
+        self.api_count = count
+        self.count_label.setText(f"누적 캡챠 호출 횟수 : {self.api_count}")
 
     def on_add_button_click(self):
         url = self.url_edit_box.text()
