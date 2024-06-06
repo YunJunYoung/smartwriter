@@ -27,6 +27,13 @@ import string
 
 import random
 
+os.environ["TCL_LIBRARY"] = os.path.join(
+    sys.base_prefix, "lib", "tcl8.6"
+)
+os.environ["TK_LIBRARY"] = os.path.join(
+    sys.base_prefix, "lib", "tk8.6"
+)
+
 # 한글 초성, 중성, 종성 리스트
 chosung = ['ㄱ', 'ㄲ', 'ㄴ', 'ㄷ', 'ㄸ', 'ㄹ', 'ㅁ', 'ㅂ', 'ㅃ', 'ㅅ', 'ㅆ', 'ㅇ', 'ㅈ', 'ㅉ', 'ㅊ', 'ㅋ', 'ㅌ', 'ㅍ', 'ㅎ']
 jungsung = ['ㅏ', 'ㅐ', 'ㅑ', 'ㅒ', 'ㅓ', 'ㅔ', 'ㅕ', 'ㅖ', 'ㅗ', 'ㅘ', 'ㅙ', 'ㅚ', 'ㅛ', 'ㅜ', 'ㅝ', 'ㅞ', 'ㅟ', 'ㅠ', 'ㅡ', 'ㅢ', 'ㅣ']
