@@ -2,6 +2,8 @@ import sys
 import os
 import datetime
 import json
+import urllib.parse
+
 from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QLineEdit, QMenuBar, \
     QAction, QMessageBox, QMainWindow, QMenu, QProgressBar, QTextEdit, QActionGroup, QSizePolicy, QGroupBox, QTableWidget, \
     QGridLayout, QTableWidget, QHeaderView, QAbstractItemView, QTableWidgetItem
@@ -16,9 +18,12 @@ from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.common.exceptions import UnexpectedAlertPresentException
+from selenium.common.exceptions import NoSuchElementException
 import requests
 import time
 from twocaptcha.solver import TwoCaptcha
+import pandas as pd
+import string
 
 import random
 
@@ -120,17 +125,111 @@ def write_api_count(count, filename='api_count.json'):
         json.dump(data, file)
 
 
+def load_credentials_from_json(json_file):
+    with open(json_file, 'r') as f:
+        credentials = json.load(f)
+    return credentials
+
+
+def save_credentials_to_json(json_file, credentials):
+    with open(json_file, 'w') as f:
+        json.dump(credentials, f, indent=4)
+
+
+def get_credentials(url, json_file='credentials.json'):
+    credentials = load_credentials_from_json(json_file)
+    if url in credentials:
+        return credentials[url]['id'], credentials[url]['pw']
+    else:
+        print(f"No credentials found for {url}")
+        return None, None
+
+
+def get_login_url(write_url):
+    # 글쓰기 주소에서 마지막으로 / 가 존재하는 곳을 찾아 로그인 주소를 생성
+    last_slash_index = write_url.rfind('/')
+    if last_slash_index != -1:
+        login_url = write_url[:last_slash_index + 1] + 'login.php'
+        return login_url
+    else:
+        print("Invalid URL format.")
+        return None
+
+
+def read_excel_data(file_path):
+    # 엑셀 파일을 읽어 DataFrame으로 변환
+    df = pd.read_excel(file_path)
+
+    # 첫 번째 행은 데이터가 아니므로 건너뜀
+    data = df.iloc[1:]
+
+    titles = data['제목'].tolist()  # 제목 열을 리스트로 변환
+    contents = data['내용'].tolist()  # 내용 열을 리스트로 변환
+
+    return titles, contents
+
+
+def get_random_title_content(file_path):
+    titles, contents = read_excel_data(file_path)
+
+    if len(titles) != len(contents):
+        raise ValueError("Titles and contents lists must be of the same length")
+
+    random_index = random.randint(0, len(titles) - 1)
+
+    return titles[random_index], contents[random_index]
+
+
+# 엑셀 파일 경로
+excel_file_path = "ad.xlsx"
+
+# Example usage
+def replace_spaces_with_decoded_unicode(text: str, unicode_file: str) -> str:
+    # Load the unicode characters from the JSON file
+    with open(unicode_file, 'r', encoding='utf-8') as json_file:
+        unicode_list = json.load(json_file)
+
+    decoded_unicode_list = []
+    for char in unicode_list:
+        try:
+            # Try to decode the unicode character
+            decoded_unicode_list.append(urllib.parse.unquote(char))
+        except Exception as e:
+            print(f"Error decoding {char}: {e}")
+
+    # Convert the text by replacing spaces with random decoded unicode characters
+    result = []
+    for char in text:
+        if char == ' ':
+            while True:
+                try:
+                    replacement_char = random.choice(decoded_unicode_list)
+                    # Verify that the chosen unicode character is valid by encoding and decoding it
+                    if replacement_char.encode('utf-8').decode('utf-8') == replacement_char:
+                        result.append(replacement_char)
+                        break
+                except Exception as e:
+                    # If an error occurs, continue to choose another random character
+                    print(f"Error with character {replacement_char}: {e}")
+                    continue
+        else:
+            result.append(char)
+
+    return ''.join(result)
+
+
 class Worker(QThread):
     progress_updated = pyqtSignal(int)
     log_updated = pyqtSignal(str)
     api_count_updated = pyqtSignal(int)
 
-    def __init__(self, urls, title, content):
+    def __init__(self, urls, writing_delay, overall_delay, repeat):
         super().__init__()
         self.urls = urls
-        self.title = title
-        self.content = content
         self.api_count = read_api_count()
+        self.writing_delay = writing_delay
+        self.overall_delay = overall_delay
+        self.repeat = repeat
         self.driver = None
 
     def init_web_driver(self):
@@ -144,61 +243,95 @@ class Worker(QThread):
             print_with_debug(e)
 
     def run(self):
-        self.init_web_driver()
-        for i, url in enumerate(self.urls):
-            try:
-                self.driver.get(url)
-                self.log_updated.emit(f'[{url}] 사이트 이동')
-                self.driver.implicitly_wait(3)
-
-                # Wrapping find_element with try-except to handle missing elements
+        for k in range(self.repeat):
+            self.log_updated.emit(f'{k+1}번째 반복 실행')
+            for i, url in enumerate(self.urls):
                 try:
-                    name_box = self.driver.find_element(By.CSS_SELECTOR, "#wr_name")
-                    name_box.send_keys(generate_korean_name())
-                except Exception as e:
-                    self.log_updated.emit(f'[{url}] 이름 입력 요소를 찾을 수 없습니다.')
+                    self.init_web_driver()
+                    login_url = get_login_url(url)
+                    _id, _pw = get_credentials(url)
 
-                try:
-                    phone_box = self.driver.find_element(By.CSS_SELECTOR, "#wr_homepage")
-                    phone_box.send_keys(generate_korean_phone_number())
-                except Exception as e:
-                    self.log_updated.emit(f'[{url}] 전화번호 입력 요소를 찾을 수 없습니다.')
+                    self.driver.get(login_url)
+                    self.log_updated.emit(f'[Index:{k+1}_{i+1}] [{login_url}] 로그인 페이지 이동')
+                    self.driver.implicitly_wait(3)
 
-                try:
-                    password_box = self.driver.find_element(By.CSS_SELECTOR, "#wr_password")
-                    password_box.send_keys("password1")
-                except Exception as e:
-                    self.log_updated.emit(f'[{url}] 비밀번호 입력 요소를 찾을 수 없습니다.')
+                    try:
+                        id_box = self.driver.find_element(By.CSS_SELECTOR, "#login_id")
+                        id_box.send_keys(_id)
+                    except Exception as e:
+                        print_with_debug(e)
 
-                try:
-                    subject_box = self.driver.find_element(By.CSS_SELECTOR, "#wr_subject")
-                    subject_box.send_keys(self.title)
-                except Exception as e:
-                    self.log_updated.emit(f'[{url}] 제목 입력 요소를 찾을 수 없습니다.')
+                    try:
+                        pw_box = self.driver.find_element(By.CSS_SELECTOR, "#login_pw")
+                        pw_box.send_keys(_pw)
+                    except Exception as e:
+                        print_with_debug(e)
 
-                try:
-                    content_box = self.driver.find_element(By.CSS_SELECTOR, "#wr_content")
-                    content_box.send_keys(self.content)
-                except Exception as e:
-                    self.log_updated.emit(f'[{url}] 본문 입력 요소를 찾을 수 없습니다.')
+                    try:
+                        login_button = self.driver.find_element(By.CSS_SELECTOR, "#login_fs > input.btn_submit")
+                        login_button.click()
+                    except Exception as e:
+                        print_with_debug(e)
 
-                try:
-                    email_box = self.driver.find_element(By.CSS_SELECTOR, "#wr_email")
-                    email_box.send_keys("test@naver.com")
-                except Exception as e:
-                    self.log_updated.emit(f'[{url}] 이메일 입력 요소를 찾을 수 없습니다.')
+                    time.sleep(1)
 
-                self.log_updated.emit(f'[{url}] 정보입력 완료')
-                self.write_contents(url)
-                self.progress_updated.emit(i + 1)
-                self.driver.quit()
-                self.init_web_driver()
-            except UnexpectedAlertPresentException as e:
-                self.driver.quit()
-                self.log_updated.emit(f'[{url}] 경고창 감지')
-                self.init_web_driver()
-            except Exception as e:
-                print_with_debug(e)
+                    self.driver.get(url)
+                    self.log_updated.emit(f'[Index:{k+1}_{i+1}] [{url}] 글쓰기 페이지 이동')
+                    self.driver.implicitly_wait(3)
+                    # try:
+                    #     name_box = self.driver.find_element(By.CSS_SELECTOR, "#wr_name")
+                    #     name_box.send_keys(generate_korean_name())
+                    # except Exception as e:
+                    #     self.log_updated.emit(f'[{url}] 이름 입력 요소를 찾을 수 없습니다.')
+                    #
+                    # try:
+                    #     phone_box = self.driver.find_element(By.CSS_SELECTOR, "#wr_homepage")
+                    #     phone_box.send_keys(generate_korean_phone_number())
+                    # except Exception as e:
+                    #     self.log_updated.emit(f'[{url}] 전화번호 입력 요소를 찾을 수 없습니다.')
+                    #
+                    # try:
+                    #     password_box = self.driver.find_element(By.CSS_SELECTOR, "#wr_password")
+                    #     password_box.send_keys("password1")
+                    # except Exception as e:
+                    #     self.log_updated.emit(f'[{url}] 비밀번호 입력 요소를 찾을 수 없습니다.')
+
+                    title, content = get_random_title_content(excel_file_path)
+                    convert_title = replace_spaces_with_decoded_unicode(title, 'special_char.json')
+                    try:
+                        subject_box = self.driver.find_element(By.CSS_SELECTOR, "#wr_subject")
+                        subject_box.send_keys(convert_title)
+                    except Exception as e:
+                        self.log_updated.emit(f'[{url}] 제목 입력 요소를 찾을 수 없습니다.')
+
+                    try:
+                        content_box = self.driver.find_element(By.CSS_SELECTOR, "#wr_content")
+                        content_box.send_keys(content)
+                    except Exception as e:
+                        self.log_updated.emit(f'[{url}] 본문 입력 요소를 찾을 수 없습니다.')
+
+                    # try:
+                    #     email_box = self.driver.find_element(By.CSS_SELECTOR, "#wr_email")
+                    #     email_box.send_keys("test@naver.com")
+                    # except Exception as e:
+                    #     self.log_updated.emit(f'[{url}] 이메일 입력 요소를 찾을 수 없습니다.')
+
+                    self.write_contents(url)
+                    self.log_updated.emit(f'[Index:{k + 1}_{i + 1}] [{url}] 글쓰기 완료')
+                    self.progress_updated.emit(i + 1)
+                    self.driver.quit()
+                    
+                    if i+1 != len(self.urls):
+                        self.log_updated.emit(f'다음 글쓰기 까지 {self.writing_delay}초 대기')
+                        time.sleep(self.writing_delay)
+                except UnexpectedAlertPresentException as e:
+                    self.driver.quit()
+                    self.log_updated.emit(f'[{url}] 경고창 감지')
+                    self.init_web_driver()
+                except Exception as e:
+                    print_with_debug(e)
+            self.log_updated.emit(f'다음 반복 까지 {self.overall_delay}초 대기')
+            time.sleep(self.overall_delay)
         self.driver.quit()
 
     def write_contents(self, url):
@@ -231,17 +364,16 @@ class Worker(QThread):
 
                     captcha_box = self.driver.find_element(By.CSS_SELECTOR, "#captcha_key")
                     captcha_box.send_keys(number)
+        except NoSuchElementException:
+            print("Captcha image not found. Skipping captcha solving.")
 
-                    try:
-                        submit_button = self.driver.find_element(By.CSS_SELECTOR, "#btn_submit")
-                        submit_button.click()
-                        self.log_updated.emit(f'[{url}] 글쓰기 작성 완료')
-                    except UnexpectedAlertPresentException as e:
-                        self.driver.quit()
-                        self.log_updated.emit(f'[{url}] 경고창 감지')
-                        self.init_web_driver()
-                    except Exception as e:
-                        print_with_debug(e)
+        try:
+            submit_button = self.driver.find_element(By.CSS_SELECTOR, "#btn_submit")
+            submit_button.click()
+        except UnexpectedAlertPresentException as e:
+            self.driver.quit()
+            self.log_updated.emit(f'[{url}] 경고창 감지')
+            self.init_web_driver()
         except Exception as e:
             print_with_debug(e)
 
@@ -266,6 +398,7 @@ class MainWindow(QMainWindow):
         self.log_edit_box = QTextEdit(self)
         self.count_label = None
         self.init_ui()
+        self.load_settings()
         self.update_list()
         self.worker = None
 
@@ -273,6 +406,28 @@ class MainWindow(QMainWindow):
         try:
             self.setWindowTitle('SmartWriter')
             self.setWindowIcon(QIcon('main_icon.png'))
+
+            writing_delay_label = QLabel('글쓰기 딜레이(초)')
+            self.writing_delay_input = QLineEdit()
+            overall_delay_label = QLabel('전체 딜레이(초)')
+            self.overall_delay_input = QLineEdit()
+            repeat_label = QLabel('전체 반복 회수')
+            self.repeat_input = QLineEdit()
+
+            # Set the size policy for the new input boxes
+            self.writing_delay_input.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            self.overall_delay_input.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            self.repeat_input.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+
+            # Create a layout for the new input boxes and labels
+            delay_layout = QHBoxLayout()
+            delay_layout.addWidget(writing_delay_label)
+            delay_layout.addWidget(self.writing_delay_input)
+            delay_layout.addWidget(overall_delay_label)
+            delay_layout.addWidget(self.overall_delay_input)
+            delay_layout.addWidget(repeat_label)
+            delay_layout.addWidget(self.repeat_input)
+
             self.url_edit_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
             self.add_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
             self.delete_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
@@ -297,6 +452,7 @@ class MainWindow(QMainWindow):
             self.delete_button.clicked.connect(self.on_delete_button_click)
 
             main_layout = QVBoxLayout()
+            main_layout.addLayout(delay_layout)
             main_layout.addWidget(self.write_button)
 
             self.count_label = QLabel(f"누적 캡챠 호출 횟수 : {self.api_count}", self)
@@ -324,7 +480,7 @@ class MainWindow(QMainWindow):
             group_box_bottom.setStyleSheet("QGroupBox { border: 1px solid gray; }")
             group_box_bottom.setMaximumHeight(300)
             group_box_bottom.setLayout(inner_layout_bottom)
-            main_layout.addWidget(group_box_bottom)
+            #main_layout.addWidget(group_box_bottom)
 
             main_layout.addWidget(self.progress_bar)
 
@@ -342,6 +498,25 @@ class MainWindow(QMainWindow):
         except Exception as e:
             print_with_debug(e)
 
+    def save_settings(self):
+        settings = {
+            'writing_delay': self.writing_delay_input.text(),
+            'overall_delay': self.overall_delay_input.text(),
+            'repeat': self.repeat_input.text()
+        }
+        with open('settings.json', 'w') as f:
+            json.dump(settings, f)
+
+    def load_settings(self):
+        try:
+            with open('settings.json', 'r') as f:
+                settings = json.load(f)
+                self.writing_delay_input.setText(settings.get('writing_delay', ''))
+                self.overall_delay_input.setText(settings.get('overall_delay', ''))
+                self.repeat_input.setText(settings.get('repeat', ''))
+        except Exception as e:
+            print_with_debug(e)
+
     def add_log(self, log):
         current_time = datetime.datetime.now()
         formatted_time = current_time.strftime("[%Y-%m-%d %H:%M:%S]")
@@ -351,9 +526,10 @@ class MainWindow(QMainWindow):
         self.log_edit_box.verticalScrollBar().setValue(self.log_edit_box.verticalScrollBar().maximum())
 
     def on_write_button_click(self):
+        self.save_settings()
         urls = self.get_all_urls()
         self.progress_bar.setMaximum(len(urls))
-        self.worker = Worker(urls, self.title, self.content)
+        self.worker = Worker(urls, int(self.writing_delay_input.text()), int(self.overall_delay_input.text()), int(self.repeat_input.text()))
         self.worker.progress_updated.connect(self.update_progress)
         self.worker.log_updated.connect(self.add_log)
         self.worker.api_count_updated.connect(self.update_api_count)
