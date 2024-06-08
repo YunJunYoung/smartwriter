@@ -5,7 +5,8 @@ import json
 import urllib.parse
 
 from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QLineEdit, QMenuBar, \
-    QAction, QMessageBox, QMainWindow, QMenu, QProgressBar, QTextEdit, QActionGroup, QSizePolicy, QGroupBox, QTableWidget, \
+    QAction, QMessageBox, QMainWindow, QMenu, QProgressBar, QTextEdit, QActionGroup, QSizePolicy, QGroupBox, \
+    QTableWidget, \
     QGridLayout, QTableWidget, QHeaderView, QAbstractItemView, QTableWidgetItem, QCheckBox
 from PyQt5.QtGui import QIcon
 from webdriver_manager.chrome import ChromeDriverManager
@@ -35,7 +36,9 @@ import random
 # 한글 초성, 중성, 종성 리스트
 chosung = ['ㄱ', 'ㄲ', 'ㄴ', 'ㄷ', 'ㄸ', 'ㄹ', 'ㅁ', 'ㅂ', 'ㅃ', 'ㅅ', 'ㅆ', 'ㅇ', 'ㅈ', 'ㅉ', 'ㅊ', 'ㅋ', 'ㅌ', 'ㅍ', 'ㅎ']
 jungsung = ['ㅏ', 'ㅐ', 'ㅑ', 'ㅒ', 'ㅓ', 'ㅔ', 'ㅕ', 'ㅖ', 'ㅗ', 'ㅘ', 'ㅙ', 'ㅚ', 'ㅛ', 'ㅜ', 'ㅝ', 'ㅞ', 'ㅟ', 'ㅠ', 'ㅡ', 'ㅢ', 'ㅣ']
-jongsung = [''] + ['ㄱ', 'ㄲ', 'ㄳ', 'ㄴ', 'ㄵ', 'ㄶ', 'ㄷ', 'ㄹ', 'ㄺ', 'ㄻ', 'ㄼ', 'ㄽ', 'ㄾ', 'ㄿ', 'ㅀ', 'ㅁ', 'ㅂ', 'ㅄ', 'ㅅ', 'ㅆ', 'ㅇ', 'ㅈ', 'ㅊ', 'ㅋ', 'ㅌ', 'ㅍ', 'ㅎ']
+jongsung = [''] + ['ㄱ', 'ㄲ', 'ㄳ', 'ㄴ', 'ㄵ', 'ㄶ', 'ㄷ', 'ㄹ', 'ㄺ', 'ㄻ', 'ㄼ', 'ㄽ', 'ㄾ', 'ㄿ', 'ㅀ', 'ㅁ', 'ㅂ', 'ㅄ', 'ㅅ', 'ㅆ',
+                   'ㅇ', 'ㅈ', 'ㅊ', 'ㅋ', 'ㅌ', 'ㅍ', 'ㅎ']
+
 
 def generate_korean_name():
     name_length = random.choice([3, 4])  # 이름 길이를 3 또는 4로 랜덤하게 선택
@@ -66,6 +69,7 @@ def generate_korean_phone_number():
 
     return phone_number
 
+
 api_key = '37f1af7f0d286cd9ad65892446c64ab7'
 solver = TwoCaptcha(api_key, defaultTimeout=30, pollingInterval=5)
 
@@ -81,24 +85,6 @@ def get_center_position(width, height):
     x = int((screen_geometry.width() - width) / 2 + screen_geometry.left())
     y = int((screen_geometry.height() - height) / 2 + screen_geometry.top())
     return x, y
-
-
-def read_urls_from_file(filename):
-    try:
-        with open(filename, 'r') as file:
-            data = json.load(file)
-            return data.get('urls', [])
-    except FileNotFoundError:
-        write_urls_to_file(filename, [])
-        return []
-    except json.JSONDecodeError:
-        return []
-
-
-def write_urls_to_file(filename, urls):
-    data = {'urls': urls}
-    with open(filename, 'w') as file:
-        json.dump(data, file)
 
 
 def read_data_from_file(filename):
@@ -141,15 +127,6 @@ def save_credentials_to_json(json_file, credentials):
         json.dump(credentials, f, indent=4)
 
 
-def get_credentials(url, json_file='credentials.json'):
-    credentials = load_credentials_from_json(json_file)
-    if url in credentials:
-        return credentials[url]['id'], credentials[url]['pw']
-    else:
-        print(f"No credentials found for {url}")
-        return None, None
-
-
 def get_login_url(write_url):
     # 글쓰기 주소에서 마지막으로 / 가 존재하는 곳을 찾아 로그인 주소를 생성
     last_slash_index = write_url.rfind('/')
@@ -187,6 +164,7 @@ def get_random_title_content(file_path):
 
 # 엑셀 파일 경로
 excel_file_path = "ad.xlsx"
+
 
 # Example usage
 def replace_spaces_with_decoded_unicode(text: str, unicode_file: str) -> str:
@@ -228,9 +206,9 @@ class Worker(QThread):
     log_updated = pyqtSignal(str)
     api_count_updated = pyqtSignal(int)
 
-    def __init__(self, urls, writing_delay, overall_delay, repeat, convert):
+    def __init__(self, entries, writing_delay, overall_delay, repeat, convert):
         super().__init__()
-        self.urls = urls
+        self.entries = entries
         self.api_count = read_api_count()
         self.writing_delay = writing_delay
         self.overall_delay = overall_delay
@@ -243,7 +221,8 @@ class Worker(QThread):
             chrome_driver_path = ChromeDriverManager().install()
             options = webdriver.ChromeOptions()
             options.add_argument("--start-maximized")
-            options.add_argument(f"user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36 Edg/91.0.864.59")
+            options.add_argument(
+                f"user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36 Edg/91.0.864.59")
             self.driver = webdriver.Chrome(service=Service(chrome_driver_path), options=options)
             self.driver.implicitly_wait(3)
             self.driver.delete_all_cookies()
@@ -258,73 +237,95 @@ class Worker(QThread):
 
     def run(self):
         for k in range(self.repeat):
-            self.log_updated.emit(f'{k+1}번째 반복 실행')
-            for i, url in enumerate(self.urls):
+            self.log_updated.emit(f'{k + 1}번째 반복 실행')
+            for i, entry in enumerate(self.entries):
                 try:
+                    url, user_id, password = entry
                     self.init_web_driver()
-                    login_url = get_login_url(url)
-                    _id, _pw = get_credentials(url)
 
-                    self.driver.get(login_url)
-                    self.log_updated.emit(f'[Index:{k+1}_{i+1}] [{login_url}] 로그인 페이지 이동')
+                    if user_id != '' and password != '':
+                        login_need = True
+                    else:
+                        login_need = False
 
                     wait = WebDriverWait(self.driver, 3)  # 최대 20초 대기
-                    try:
-                        id_box = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "#login_id")))
-                        id_box.send_keys(_id)
-                    except Exception as e:
-                        print_with_debug(e)
 
-                    try:
-                        # 명시적 대기를 사용하여 비밀번호 입력 상자가 로드될 때까지 대기
-                        pw_box = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "#login_pw")))
-                        pw_box.send_keys(_pw)
-                    except Exception as e:
-                        print_with_debug(e)
+                    if login_need:
+                        login_url = get_login_url(url)
+                        self.driver.get(login_url)
+                        self.log_updated.emit(f'[Index:{k + 1}_{i + 1}] [{login_url}] 로그인 페이지 이동')
 
-                    try:
-                        # 명시적 대기를 사용하여 로그인 버튼이 로드될 때까지 대기
-                        login_button = wait.until(
-                            EC.element_to_be_clickable((By.CSS_SELECTOR, "#login_fs > input.btn_submit")))
-                        login_button.click()
-                    except Exception as e:
-                        print_with_debug(e)
                         try:
-                            # 다른 로그인 버튼을 대기 후 클릭
-                            login_button = wait.until(
-                                EC.element_to_be_clickable((By.CSS_SELECTOR, "#login_fs > button")))
-                            login_button.click()
+                            id_box = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "#login_id")))
+                            id_box.send_keys(user_id)
                         except Exception as e:
                             print_with_debug(e)
 
-                    time.sleep(1)
+                        try:
+                            # 명시적 대기를 사용하여 비밀번호 입력 상자가 로드될 때까지 대기
+                            pw_box = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "#login_pw")))
+                            pw_box.send_keys(password)
+                        except Exception as e:
+                            print_with_debug(e)
+
+                        try:
+                            # 명시적 대기를 사용하여 로그인 버튼이 로드될 때까지 대기
+                            login_button = wait.until(
+                                EC.element_to_be_clickable((By.CSS_SELECTOR, "#login_fs > input.btn_submit")))
+                            self.driver.execute_script("arguments[0].scrollIntoView();", login_button)
+                            login_button.click()
+                        except Exception as e:
+                            try:
+                                # 다른 로그인 버튼을 대기 후 클릭
+                                login_button = wait.until(
+                                    EC.element_to_be_clickable((By.CSS_SELECTOR, "#login_fs > button")))
+                                login_button.click()
+                            except Exception as e:
+                                try:
+                                    login_button = wait.until(
+                                        EC.element_to_be_clickable((By.CSS_SELECTOR, "#login_frm > input.btn_submit")))
+                                    login_button.click()
+                                except Exception as e:
+                                    print_with_debug(e)
+                        time.sleep(1)
 
                     self.driver.get(url)
-                    self.log_updated.emit(f'[Index:{k+1}_{i+1}] [{url}] 글쓰기 페이지 이동')
-                    # try:
-                    #     name_box = self.driver.find_element(By.CSS_SELECTOR, "#wr_name")
-                    #     name_box.send_keys(generate_korean_name())
-                    # except Exception as e:
-                    #     self.log_updated.emit(f'[{url}] 이름 입력 요소를 찾을 수 없습니다.')
-                    #
-                    # try:
-                    #     phone_box = self.driver.find_element(By.CSS_SELECTOR, "#wr_homepage")
-                    #     phone_box.send_keys(generate_korean_phone_number())
-                    # except Exception as e:
-                    #     self.log_updated.emit(f'[{url}] 전화번호 입력 요소를 찾을 수 없습니다.')
-                    #
-                    # try:
-                    #     password_box = self.driver.find_element(By.CSS_SELECTOR, "#wr_password")
-                    #     password_box.send_keys("password1")
-                    # except Exception as e:
-                    #     self.log_updated.emit(f'[{url}] 비밀번호 입력 요소를 찾을 수 없습니다.')
+                    self.log_updated.emit(f'[Index:{k + 1}_{i + 1}] [{url}] 글쓰기 페이지 이동')
+
+                    if login_need is False:
+                        try:
+                            name_box = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "#wr_name")))
+                            name_box.send_keys(generate_korean_name())
+                        except Exception as e:
+                            self.log_updated.emit(f'[{url}] 이름 입력 요소를 찾을 수 없습니다.')
+
+                        try:
+                            phone_box = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "#wr_homepage")))
+                            phone_box.send_keys(generate_korean_phone_number())
+                        except Exception as e:
+                            self.log_updated.emit(f'[{url}] 전화번호 입력 요소를 찾을 수 없습니다.')
+
+                        try:
+                            password_box = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "#wr_password")))
+                            password_box.send_keys("password1")
+                        except Exception as e:
+                            self.log_updated.emit(f'[{url}] 비밀번호 입력 요소를 찾을 수 없습니다.')
+
+                        try:
+                            email_box = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "#wr_email")))
+                            email_box.send_keys("test@naver.com")
+                        except Exception as e:
+                            self.log_updated.emit(f'[{url}] 이메일 입력 요소를 찾을 수 없습니다.')
 
                     title, content = get_random_title_content(excel_file_path)
                     if self.convert:
                         title = replace_spaces_with_decoded_unicode(title, 'special_char.json')
+
                     try:
                         # 명시적 대기를 사용하여 제목 입력 상자가 로드될 때까지 대기
                         subject_box = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "#wr_subject")))
+                        self.driver.execute_script("arguments[0].scrollIntoView();", subject_box)
+                        subject_box.click()
                         self.set_value_with_clipboard(subject_box, title)
                     except Exception as e:
                         print(f'[{url}] 제목 입력 요소를 찾을 수 없습니다. 오류: {str(e)}')
@@ -332,40 +333,21 @@ class Worker(QThread):
                     try:
                         # 명시적 대기를 사용하여 본문 입력 상자가 로드될 때까지 대기
                         content_box = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "#wr_content")))
+                        self.driver.execute_script("arguments[0].scrollIntoView();", content_box)
                         self.set_value_with_clipboard(content_box, content)
                     except Exception as e:
                         print(f'[{url}] 본문 입력 요소를 찾을 수 없습니다. 오류: {str(e)}')
-                    # try:
-                    #     # 명시적 대기를 사용하여 제목 입력 상자가 로드될 때까지 대기
-                    #     subject_box = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "#wr_subject")))
-                    #     subject_box.send_keys(title)
-                    # except Exception as e:
-                    #     self.log_updated.emit(f'[{url}] 제목 입력 요소를 찾을 수 없습니다. 오류: {str(e)}')
-                    #
-                    # try:
-                    #     # 명시적 대기를 사용하여 본문 입력 상자가 로드될 때까지 대기
-                    #     content_box = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "#wr_content")))
-                    #     content_box.send_keys(content)
-                    # except Exception as e:
-                    #     self.log_updated.emit(f'[{url}] 본문 입력 요소를 찾을 수 없습니다. 오류: {str(e)}')
 
-                    # try:
-                    #     email_box = self.driver.find_element(By.CSS_SELECTOR, "#wr_email")
-                    #     email_box.send_keys("test@naver.com")
-                    # except Exception as e:
-                    #     self.log_updated.emit(f'[{url}] 이메일 입력 요소를 찾을 수 없습니다.')
-
-                    self.write_contents(url)
+                    self.write_contents(url, login_need)
                     self.log_updated.emit(f'[Index:{k + 1}_{i + 1}] [{url}] 글쓰기 완료')
                     self.progress_updated.emit(i + 1)
                     self.driver.quit()
-                    
-                    if i+1 != len(self.urls):
+
+                    if i + 1 != len(self.entries):
                         self.log_updated.emit(f'다음 글쓰기 까지 {self.writing_delay}초 대기')
                         time.sleep(self.writing_delay)
                 except UnexpectedAlertPresentException as e:
                     self.driver.quit()
-                    self.log_updated.emit(f'[{url}] 경고창 감지')
                     self.init_web_driver()
                 except Exception as e:
                     print_with_debug(e)
@@ -373,41 +355,44 @@ class Worker(QThread):
             time.sleep(self.overall_delay)
         self.driver.quit()
 
-    def write_contents(self, url):
+    def write_contents(self, url, login_need):
+        if login_need is False:
+            try:
+                captcha_img = self.driver.find_element(By.CSS_SELECTOR, "#captcha_img")
+                captcha_url = captcha_img.get_attribute("src")
+                cookies = self.driver.get_cookies()
+
+                session = requests.Session()
+                for cookie in cookies:
+                    session.cookies.set(cookie['name'], cookie['value'])
+
+                response = session.get(captcha_url, headers={
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                })
+
+                if response.status_code == 200:
+                    with open("captcha.jpg", "wb") as file:
+                        file.write(response.content)
+                    try:
+                        result = solver.normal('captcha.jpg')
+                    except Exception as e:
+                        sys.exit(e)
+                    else:
+                        self.api_count += 1
+                        self.api_count_updated.emit(self.api_count)
+                        write_api_count(self.api_count)
+                        number = result['code']
+                        self.log_updated.emit(f'[{url}] 캡챠 인식 완료 : {number}')
+
+                        captcha_box = self.driver.find_element(By.CSS_SELECTOR, "#captcha_key")
+                        captcha_box.send_keys(number)
+            except NoSuchElementException:
+                print("Captcha image not found. Skipping captcha solving.")
+
         try:
-            captcha_img = self.driver.find_element(By.CSS_SELECTOR, "#captcha_img")
-            captcha_url = captcha_img.get_attribute("src")
-            cookies = self.driver.get_cookies()
-
-            session = requests.Session()
-            for cookie in cookies:
-                session.cookies.set(cookie['name'], cookie['value'])
-
-            response = session.get(captcha_url, headers={
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-            })
-
-            if response.status_code == 200:
-                with open("captcha.jpg", "wb") as file:
-                    file.write(response.content)
-                try:
-                    result = solver.normal('captcha.jpg')
-                except Exception as e:
-                    sys.exit(e)
-                else:
-                    self.api_count += 1
-                    self.api_count_updated.emit(self.api_count)
-                    write_api_count(self.api_count)
-                    number = result['code']
-                    self.log_updated.emit(f'[{url}] 캡챠 인식 완료 : {number}')
-
-                    captcha_box = self.driver.find_element(By.CSS_SELECTOR, "#captcha_key")
-                    captcha_box.send_keys(number)
-        except NoSuchElementException:
-            print("Captcha image not found. Skipping captcha solving.")
-
-        try:
-            submit_button = self.driver.find_element(By.CSS_SELECTOR, "#btn_submit")
+            wait = WebDriverWait(self.driver, 3)
+            submit_button = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "#btn_submit")))
+            self.driver.execute_script("arguments[0].scrollIntoView();", submit_button)
             submit_button.click()
         except UnexpectedAlertPresentException as e:
             self.driver.quit()
@@ -420,25 +405,22 @@ class Worker(QThread):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
+        self.filename = 'urls.json'
         self.write_button = QPushButton("글쓰기 시작")
-        self.url_list = read_urls_from_file('urls.json')
         self.api_count = read_api_count()
         self.title, self.content = read_data_from_file('data.json')
-        self.url_edit_box = QLineEdit("")
-        self.url_edit_box.setPlaceholderText("신규 게시판 url 주소를 입력하세요")
         self.title_modify_button = QPushButton("변경")
         self.title_edit_box = QLineEdit(self.title)
         self.content_edit_box = QTextEdit(self.content)
         self.add_button = QPushButton("추가")
         self.delete_button = QPushButton("삭제")
         self.table = QTableWidget()
-        self.url_list_widget = qtw.QListWidget(self)
         self.progress_bar = QProgressBar(self)
         self.log_edit_box = QTextEdit(self)
         self.count_label = None
         self.init_ui()
         self.load_settings()
-        self.update_list()
+        self.load_urls_from_file(self.filename)
         self.worker = None
 
     def init_ui(self):
@@ -453,7 +435,6 @@ class MainWindow(QMainWindow):
             repeat_label = QLabel('전체 반복 회수')
             self.repeat_input = QLineEdit()
             self.convert_checkbox = QCheckBox('특수문자 치환')
-
 
             # Set the size policy for the new input boxes
             self.writing_delay_input.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
@@ -470,26 +451,44 @@ class MainWindow(QMainWindow):
             delay_layout.addWidget(self.repeat_input)
             delay_layout.addWidget(self.convert_checkbox)
 
-            self.url_edit_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+
             self.add_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
             self.delete_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
 
+            self.url_edit_box = QLineEdit()
+            self.id_edit_box = QLineEdit()
+            self.pw_edit_box = QLineEdit()
+
             inner_layout = QVBoxLayout()
             inner_layout_top_layout = QHBoxLayout()
-            inner_layout_top_layout.addWidget(self.url_edit_box, stretch=5)
+            inner_layout_top_layout.addWidget(QLabel('URL:'))
+            inner_layout_top_layout.addWidget(self.url_edit_box, stretch=10)
+            inner_layout_top_layout.addWidget(QLabel('ID:'))
+            inner_layout_top_layout.addWidget(self.id_edit_box, stretch=2)
+            inner_layout_top_layout.addWidget(QLabel('PW:'))
+            inner_layout_top_layout.addWidget(self.pw_edit_box, stretch=2)
             inner_layout_top_layout.addWidget(self.add_button, stretch=1)
             inner_layout_top_layout.addWidget(self.delete_button, stretch=1)
 
             inner_layout.addLayout(inner_layout_top_layout)
-            inner_layout.addWidget(self.url_list_widget)
+            self.url_table_widget = QTableWidget()
+            self.url_table_widget.setColumnCount(3)
+            self.url_table_widget.setHorizontalHeaderLabels(['URL', 'ID', 'PW'])
+            self.url_table_widget.setSelectionBehavior(QTableWidget.SelectRows)
+            self.url_table_widget.setSelectionMode(QTableWidget.ExtendedSelection)
+            self.url_table_widget.setColumnWidth(0, 550)
+            self.url_table_widget.setColumnWidth(1, 100)
+            self.url_table_widget.verticalHeader().setVisible(False)
+
+            # 마지막에 이 코드를 추가하여 URL 열이 나머지 너비를 차지하도록 설정합니다.
+            self.url_table_widget.horizontalHeader().setStretchLastSection(True)
+            inner_layout.addWidget(self.url_table_widget)
 
             group_box = QGroupBox()
             group_box.setStyleSheet("QGroupBox { border: 1px solid gray; }")
             group_box.setLayout(inner_layout)
 
-            self.url_list_widget.setSelectionMode(qtw.QAbstractItemView.MultiSelection)
-            self.url_list_widget.setMaximumHeight(500)
-            self.url_list_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)  # 크기 정책 설정
+
             self.add_button.clicked.connect(self.on_add_button_click)
             self.delete_button.clicked.connect(self.on_delete_button_click)
 
@@ -503,27 +502,6 @@ class MainWindow(QMainWindow):
 
             self.write_button.clicked.connect(self.on_write_button_click)
             main_layout.addWidget(group_box)
-
-            inner_layout_bottom = QVBoxLayout()
-            inner_layout_bottom.addWidget(QLabel('제목'))
-            inner_layout_bottom_title_layout = QHBoxLayout()
-            inner_layout_bottom_title_layout.addWidget(self.title_edit_box)
-            inner_layout_bottom_title_layout.addWidget(self.title_modify_button)
-
-            self.title_modify_button.clicked.connect(self.on_title_modify_button_click)
-
-            inner_layout_bottom.addLayout(inner_layout_bottom_title_layout)
-            inner_layout_bottom.addWidget(QLabel('본문'))
-
-            self.content_edit_box.setFixedHeight(150)
-            inner_layout_bottom.addWidget(self.content_edit_box)
-
-            group_box_bottom = QGroupBox()
-            group_box_bottom.setStyleSheet("QGroupBox { border: 1px solid gray; }")
-            group_box_bottom.setMaximumHeight(300)
-            group_box_bottom.setLayout(inner_layout_bottom)
-            #main_layout.addWidget(group_box_bottom)
-
             main_layout.addWidget(self.progress_bar)
 
             self.log_edit_box.setReadOnly(True)  # 읽기 전용으로 설정
@@ -569,9 +547,10 @@ class MainWindow(QMainWindow):
 
     def on_write_button_click(self):
         self.save_settings()
-        urls = self.get_all_urls()
-        self.progress_bar.setMaximum(len(urls))
-        self.worker = Worker(urls, int(self.writing_delay_input.text()), int(self.overall_delay_input.text()), int(self.repeat_input.text()), self.convert_checkbox.isChecked())
+        entries = self.get_all_entries()
+        self.progress_bar.setMaximum(len(entries))
+        self.worker = Worker(entries, int(self.writing_delay_input.text()), int(self.overall_delay_input.text()),
+                             int(self.repeat_input.text()), self.convert_checkbox.isChecked())
         self.worker.progress_updated.connect(self.update_progress)
         self.worker.log_updated.connect(self.add_log)
         self.worker.api_count_updated.connect(self.update_api_count)
@@ -585,19 +564,86 @@ class MainWindow(QMainWindow):
         self.count_label.setText(f"누적 캡챠 호출 횟수 : {self.api_count}")
 
     def on_add_button_click(self):
-        url = self.url_edit_box.text()
-        if url:
-            self.url_list.append(url)
-            write_urls_to_file('urls.json', self.url_list)
-            self.update_list()
-            self.url_edit_box.clear()
+        try:
+            url = self.url_edit_box.text()
+            user_id = self.id_edit_box.text()
+            password = self.pw_edit_box.text()
+
+            if url:  # URL 필수 입력
+                row_position = self.url_table_widget.rowCount()
+                self.url_table_widget.insertRow(row_position)
+                url_item = QTableWidgetItem(url)
+                url_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)  # Read-only 설정
+                self.url_table_widget.setItem(row_position, 0, url_item)
+
+                if user_id:
+                    user_id_item = QTableWidgetItem(user_id)
+                    user_id_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)  # Read-only 설정
+                    self.url_table_widget.setItem(row_position, 1, user_id_item)
+
+                if password:
+                    password_item = QTableWidgetItem(password)
+                    password_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)  # Read-only 설정
+                    self.url_table_widget.setItem(row_position, 2, password_item)
+
+                # 입력란 초기화
+                self.url_edit_box.clear()
+                self.id_edit_box.clear()
+                self.pw_edit_box.clear()
+
+                self.write_urls_to_file(self.filename)
+        except Exception as e:
+            print_with_debug(e)
+
+    def load_urls_from_file(self, filename):
+        try:
+            with open(filename, 'r') as file:
+                data = json.load(file)
+                urls = data.get('urls', [])
+                for url_info in urls:
+                    row_position = self.url_table_widget.rowCount()
+                    self.url_table_widget.insertRow(row_position)
+
+                    url_item = QTableWidgetItem(url_info.get('url', ''))
+                    url_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)  # Read-only 설정
+                    self.url_table_widget.setItem(row_position, 0, url_item)
+
+                    id_item = QTableWidgetItem(url_info.get('id', ''))
+                    id_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)  # Read-only 설정
+                    self.url_table_widget.setItem(row_position, 1, id_item)
+
+                    pw_item = QTableWidgetItem(url_info.get('pw', ''))
+                    pw_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)  # Read-only 설정
+                    self.url_table_widget.setItem(row_position, 2, pw_item)
+        except FileNotFoundError:
+            pass  # 파일이 없는 경우 무시
+        except Exception as e:
+            print_with_debug(e)
+
+    def write_urls_to_file(self, filename):
+        try:
+            urls = []
+            for row in range(self.url_table_widget.rowCount()):
+                url = self.url_table_widget.item(row, 0).text() if self.url_table_widget.item(row, 0) else ''
+                user_id = self.url_table_widget.item(row, 1).text() if self.url_table_widget.item(row, 1) else ''
+                password = self.url_table_widget.item(row, 2).text() if self.url_table_widget.item(row, 2) else ''
+                urls.append({'url': url, 'id': user_id, 'pw': password})
+
+            data = {'urls': urls}
+            with open(filename, 'w') as file:
+                json.dump(data, file)
+        except Exception as e:
+            print_with_debug(e)
 
     def on_delete_button_click(self):
-        indexes = self.url_list_widget.selectedIndexes()
-        for index in reversed(indexes):
-            self.url_list_widget.takeItem(index.row())
-            del self.url_list[index.row()]
-            write_urls_to_file('urls.json', self.url_list)
+        try:
+            selected_rows = self.url_table_widget.selectionModel().selectedRows()
+            for row in sorted(selected_rows, reverse=True):
+                self.url_table_widget.removeRow(row.row())
+
+            self.write_urls_to_file(self.filename)
+        except Exception as e:
+            print_with_debug(e)
 
     def on_title_modify_button_click(self):
         title = self.title_edit_box.text()
@@ -605,24 +651,17 @@ class MainWindow(QMainWindow):
         write_data_to_file('data.json', title, content)
         self.add_log('데이터 저장 완료')
 
-    def update_list(self):
-        self.url_list_widget.clear()
-        for url in self.url_list:
-            self.url_list_widget.addItem(url)
-
-    def get_selected_urls(self):
-        urls = []
-        indexes = self.url_list_widget.selectedIndexes()
-        for index in indexes:
-            urls.append(self.url_list[index.row()])
-        return urls
-
-    def get_all_urls(self):
-        urls = []
-        for index in range(self.url_list_widget.count()):
-            item = self.url_list_widget.item(index)
-            urls.append(item.text())
-        return urls
+    def get_all_entries(self):
+        try:
+            entries = []
+            for row in range(self.url_table_widget.rowCount()):
+                url = self.url_table_widget.item(row, 0).text() if self.url_table_widget.item(row, 0) else ''
+                user_id = self.url_table_widget.item(row, 1).text() if self.url_table_widget.item(row, 1) else ''
+                password = self.url_table_widget.item(row, 2).text() if self.url_table_widget.item(row, 2) else ''
+                entries.append([url, user_id, password])
+            return entries
+        except Exception as e:
+            print_with_debug(e)
 
 
 if __name__ == "__main__":
