@@ -2,7 +2,9 @@ import sys
 import os
 import datetime
 import json
+import re
 import urllib.parse
+import clipboard
 
 from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QLineEdit, QMenuBar, \
     QAction, QMessageBox, QMainWindow, QMenu, QProgressBar, QTextEdit, QActionGroup, QSizePolicy, QGroupBox, \
@@ -12,12 +14,15 @@ from PyQt5.QtGui import QIcon
 from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import ElementClickInterceptedException
+from selenium.webdriver.common.action_chains import ActionChains
 
 import traceback
 import qtmodern.styles
 import qtmodern.windows
 from PyQt5 import QtWidgets as qtw
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
+from selenium.common.exceptions import TimeoutException
 
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -128,13 +133,20 @@ def save_credentials_to_json(json_file, credentials):
 
 
 def get_login_url(write_url):
-    # 글쓰기 주소에서 마지막으로 / 가 존재하는 곳을 찾아 로그인 주소를 생성
-    last_slash_index = write_url.rfind('/')
-    if last_slash_index != -1:
-        login_url = write_url[:last_slash_index + 1] + 'login.php'
-        return login_url
-    else:
-        print("Invalid URL format.")
+    try:
+        # 도메인 추출을 위한 정규식
+        pattern = r"(https?://[^/]+)"
+        # 도메인 추출
+        match = re.match(pattern, write_url)
+        if match:
+            domain = match.group(1)
+            login_url = f"{domain}/bbs/login.php"
+            return login_url
+        else:
+            print("Invalid URL format.")
+            return None
+    except Exception as e:
+        print_with_debug(e)
         return None
 
 
@@ -229,11 +241,34 @@ class Worker(QThread):
         except Exception as e:
             print_with_debug(e)
 
+    def set_value_with_javascript(self, element, text):
+        try:
+            pyperclip.copy(text)
+            element.click()
+            element.send_keys(Keys.CONTROL, 'v')
+            time.sleep(1)
+        except Exception as e:
+            print_with_debug(e)
+
     def set_value_with_clipboard(self, element, text):
-        pyperclip.copy(text)
+        clipboard.copy(text)
         element.click()
         element.send_keys(Keys.CONTROL, 'v')
         time.sleep(1)  # 클립보드에서 붙여넣기를 위한 대기 시간
+
+    def switch_to_iframe_if_exists(self, selectors):
+        iframe_exist = False
+        for selector in selectors:
+            try:
+                iframe = self.driver.find_element(By.CSS_SELECTOR, selector)
+                self.driver.switch_to.frame(iframe)
+                iframe_exist = True
+                print(f'Switched to iframe using selector: {selector}')
+                break  # 첫 번째로 발견한 iframe으로 전환 후 종료
+            except Exception as e:
+                print(f'No iframe found with selector: {selector}')
+                continue  # 다음 셀렉터로 이동
+        return iframe_exist
 
     def run(self):
         for k in range(self.repeat):
@@ -268,25 +303,24 @@ class Worker(QThread):
                         except Exception as e:
                             print_with_debug(e)
 
-                        try:
-                            # 명시적 대기를 사용하여 로그인 버튼이 로드될 때까지 대기
-                            login_button = wait.until(
-                                EC.element_to_be_clickable((By.CSS_SELECTOR, "#login_fs > input.btn_submit")))
-                            self.driver.execute_script("arguments[0].scrollIntoView();", login_button)
-                            login_button.click()
-                        except Exception as e:
+                        # 시도할 로그인 버튼의 CSS 선택자 리스트
+                        login_selectors = [
+                            "#login_fs > input.btn_submit",
+                            "#login_fs > button",
+                            "#login_frm > input.btn_submit",
+                            "#mb_login > form > div:nth-child(7) > button"
+                        ]
+
+                        login_button = None
+
+                        for selector in login_selectors:
                             try:
-                                # 다른 로그인 버튼을 대기 후 클릭
-                                login_button = wait.until(
-                                    EC.element_to_be_clickable((By.CSS_SELECTOR, "#login_fs > button")))
+                                login_button = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, selector)))
                                 login_button.click()
-                            except Exception as e:
-                                try:
-                                    login_button = wait.until(
-                                        EC.element_to_be_clickable((By.CSS_SELECTOR, "#login_frm > input.btn_submit")))
-                                    login_button.click()
-                                except Exception as e:
-                                    print_with_debug(e)
+                                break  # 로그인 버튼을 찾고 클릭한 후 반복문 탈출
+                            except TimeoutException:
+                                continue  # 현재 선택자로 로그인 버튼을 찾지 못한 경우 다음 선택자로 시도
+
                         time.sleep(1)
 
                     self.driver.get(url)
@@ -322,23 +356,40 @@ class Worker(QThread):
                         title = replace_spaces_with_decoded_unicode(title, 'special_char.json')
 
                     try:
-                        # 명시적 대기를 사용하여 제목 입력 상자가 로드될 때까지 대기
                         subject_box = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "#wr_subject")))
-                        self.driver.execute_script("arguments[0].scrollIntoView();", subject_box)
-                        subject_box.click()
-                        self.set_value_with_clipboard(subject_box, title)
+                        #self.set_value_with_clipboard(subject_box, title)
+                        self.set_value_with_javascript(subject_box, title)
                     except Exception as e:
                         print(f'[{url}] 제목 입력 요소를 찾을 수 없습니다. 오류: {str(e)}')
 
-                    try:
-                        # 명시적 대기를 사용하여 본문 입력 상자가 로드될 때까지 대기
-                        content_box = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "#wr_content")))
-                        self.driver.execute_script("arguments[0].scrollIntoView();", content_box)
-                        self.set_value_with_clipboard(content_box, content)
-                    except Exception as e:
-                        print(f'[{url}] 본문 입력 요소를 찾을 수 없습니다. 오류: {str(e)}')
+                    iframe_selectors = [
+                        '#fwrite > ul > li:nth-child(4) > iframe',
+                        '#fwrite > div:nth-child(16) > div > iframe'
+                        # 필요에 따라 여기에 더 많은 셀렉터를 추가할 수 있습니다.
+                    ]
+
+                    # iframe이 있는지 확인하고 전환
+                    iframe_exist = self.switch_to_iframe_if_exists(iframe_selectors)
+                    if iframe_exist:
+                        try:
+                            html_selector = '#smart_editor2_content > div.se2_conversion_mode > ul > li:nth-child(2) > button'
+                            self.driver.find_element(By.CSS_SELECTOR, html_selector).click()
+                            pyperclip.copy(content)
+                            ActionChains(self.driver).key_down(Keys.CONTROL).send_keys('v').key_up(
+                                Keys.CONTROL).perform()
+                            self.driver.switch_to.default_content()
+                        except Exception as e:
+                            self.log_updated.emit(f'[{url}] iframe 내 본문/제목 요소를 찾을 수 없습니다.')
+                    else:
+                        try:
+                            content_box = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "#wr_content")))
+                            self.driver.execute_script("arguments[0].scrollIntoView();", content_box)
+                            self.set_value_with_clipboard(content_box, content)
+                        except Exception as e:
+                            print(f'[{url}] 본문 입력 요소를 찾을 수 없습니다. 오류: {str(e)}')
 
                     self.write_contents(url, login_need)
+                    time.sleep(5)
                     self.log_updated.emit(f'[Index:{k + 1}_{i + 1}] [{url}] 글쓰기 완료')
                     self.progress_updated.emit(i + 1)
                     self.driver.quit()
@@ -408,10 +459,7 @@ class MainWindow(QMainWindow):
         self.filename = 'urls.json'
         self.write_button = QPushButton("글쓰기 시작")
         self.api_count = read_api_count()
-        self.title, self.content = read_data_from_file('data.json')
         self.title_modify_button = QPushButton("변경")
-        self.title_edit_box = QLineEdit(self.title)
-        self.content_edit_box = QTextEdit(self.content)
         self.add_button = QPushButton("추가")
         self.delete_button = QPushButton("삭제")
         self.table = QTableWidget()
@@ -644,13 +692,6 @@ class MainWindow(QMainWindow):
             self.write_urls_to_file(self.filename)
         except Exception as e:
             print_with_debug(e)
-
-    def on_title_modify_button_click(self):
-        title = self.title_edit_box.text()
-        content = self.content_edit_box.toPlainText()
-        write_data_to_file('data.json', title, content)
-        self.add_log('데이터 저장 완료')
-
     def get_all_entries(self):
         try:
             entries = []
