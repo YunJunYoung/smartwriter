@@ -6,8 +6,11 @@ import urllib.parse
 
 from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QLineEdit, QMenuBar, \
     QAction, QMessageBox, QMainWindow, QMenu, QProgressBar, QTextEdit, QActionGroup, QSizePolicy, QGroupBox, QTableWidget, \
-    QGridLayout, QTableWidget, QHeaderView, QAbstractItemView, QTableWidgetItem
+    QGridLayout, QTableWidget, QHeaderView, QAbstractItemView, QTableWidgetItem, QCheckBox
 from PyQt5.QtGui import QIcon
+from webdriver_manager.chrome import ChromeDriverManager
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 
 import traceback
 import qtmodern.styles
@@ -19,20 +22,15 @@ from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.common.exceptions import UnexpectedAlertPresentException
 from selenium.common.exceptions import NoSuchElementException
+from selenium.webdriver.chrome.service import Service
 import requests
 import time
 from twocaptcha.solver import TwoCaptcha
 import pandas as pd
-import string
+import pyperclip
+from selenium.webdriver.common.keys import Keys
 
 import random
-
-os.environ["TCL_LIBRARY"] = os.path.join(
-    sys.base_prefix, "lib", "tcl8.6"
-)
-os.environ["TK_LIBRARY"] = os.path.join(
-    sys.base_prefix, "lib", "tk8.6"
-)
 
 # 한글 초성, 중성, 종성 리스트
 chosung = ['ㄱ', 'ㄲ', 'ㄴ', 'ㄷ', 'ㄸ', 'ㄹ', 'ㅁ', 'ㅂ', 'ㅃ', 'ㅅ', 'ㅆ', 'ㅇ', 'ㅈ', 'ㅉ', 'ㅊ', 'ㅋ', 'ㅌ', 'ㅍ', 'ㅎ']
@@ -230,7 +228,7 @@ class Worker(QThread):
     log_updated = pyqtSignal(str)
     api_count_updated = pyqtSignal(int)
 
-    def __init__(self, urls, writing_delay, overall_delay, repeat):
+    def __init__(self, urls, writing_delay, overall_delay, repeat, convert):
         super().__init__()
         self.urls = urls
         self.api_count = read_api_count()
@@ -238,16 +236,25 @@ class Worker(QThread):
         self.overall_delay = overall_delay
         self.repeat = repeat
         self.driver = None
+        self.convert = convert
 
     def init_web_driver(self):
         try:
+            chrome_driver_path = ChromeDriverManager().install()
             options = webdriver.ChromeOptions()
             options.add_argument("--start-maximized")
-            options.add_argument(
-                "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
-            self.driver = webdriver.Chrome(options=options)
+            options.add_argument(f"user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36 Edg/91.0.864.59")
+            self.driver = webdriver.Chrome(service=Service(chrome_driver_path), options=options)
+            self.driver.implicitly_wait(3)
+            self.driver.delete_all_cookies()
         except Exception as e:
             print_with_debug(e)
+
+    def set_value_with_clipboard(self, element, text):
+        pyperclip.copy(text)
+        element.click()
+        element.send_keys(Keys.CONTROL, 'v')
+        time.sleep(1)  # 클립보드에서 붙여넣기를 위한 대기 시간
 
     def run(self):
         for k in range(self.repeat):
@@ -260,31 +267,40 @@ class Worker(QThread):
 
                     self.driver.get(login_url)
                     self.log_updated.emit(f'[Index:{k+1}_{i+1}] [{login_url}] 로그인 페이지 이동')
-                    self.driver.implicitly_wait(3)
 
+                    wait = WebDriverWait(self.driver, 3)  # 최대 20초 대기
                     try:
-                        id_box = self.driver.find_element(By.CSS_SELECTOR, "#login_id")
+                        id_box = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "#login_id")))
                         id_box.send_keys(_id)
                     except Exception as e:
                         print_with_debug(e)
 
                     try:
-                        pw_box = self.driver.find_element(By.CSS_SELECTOR, "#login_pw")
+                        # 명시적 대기를 사용하여 비밀번호 입력 상자가 로드될 때까지 대기
+                        pw_box = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "#login_pw")))
                         pw_box.send_keys(_pw)
                     except Exception as e:
                         print_with_debug(e)
 
                     try:
-                        login_button = self.driver.find_element(By.CSS_SELECTOR, "#login_fs > input.btn_submit")
+                        # 명시적 대기를 사용하여 로그인 버튼이 로드될 때까지 대기
+                        login_button = wait.until(
+                            EC.element_to_be_clickable((By.CSS_SELECTOR, "#login_fs > input.btn_submit")))
                         login_button.click()
                     except Exception as e:
                         print_with_debug(e)
+                        try:
+                            # 다른 로그인 버튼을 대기 후 클릭
+                            login_button = wait.until(
+                                EC.element_to_be_clickable((By.CSS_SELECTOR, "#login_fs > button")))
+                            login_button.click()
+                        except Exception as e:
+                            print_with_debug(e)
 
                     time.sleep(1)
 
                     self.driver.get(url)
                     self.log_updated.emit(f'[Index:{k+1}_{i+1}] [{url}] 글쓰기 페이지 이동')
-                    self.driver.implicitly_wait(3)
                     # try:
                     #     name_box = self.driver.find_element(By.CSS_SELECTOR, "#wr_name")
                     #     name_box.send_keys(generate_korean_name())
@@ -304,18 +320,34 @@ class Worker(QThread):
                     #     self.log_updated.emit(f'[{url}] 비밀번호 입력 요소를 찾을 수 없습니다.')
 
                     title, content = get_random_title_content(excel_file_path)
-                    convert_title = replace_spaces_with_decoded_unicode(title, 'special_char.json')
+                    if self.convert:
+                        title = replace_spaces_with_decoded_unicode(title, 'special_char.json')
                     try:
-                        subject_box = self.driver.find_element(By.CSS_SELECTOR, "#wr_subject")
-                        subject_box.send_keys(convert_title)
+                        # 명시적 대기를 사용하여 제목 입력 상자가 로드될 때까지 대기
+                        subject_box = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "#wr_subject")))
+                        self.set_value_with_clipboard(subject_box, title)
                     except Exception as e:
-                        self.log_updated.emit(f'[{url}] 제목 입력 요소를 찾을 수 없습니다.')
+                        print(f'[{url}] 제목 입력 요소를 찾을 수 없습니다. 오류: {str(e)}')
 
                     try:
-                        content_box = self.driver.find_element(By.CSS_SELECTOR, "#wr_content")
-                        content_box.send_keys(content)
+                        # 명시적 대기를 사용하여 본문 입력 상자가 로드될 때까지 대기
+                        content_box = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "#wr_content")))
+                        self.set_value_with_clipboard(content_box, content)
                     except Exception as e:
-                        self.log_updated.emit(f'[{url}] 본문 입력 요소를 찾을 수 없습니다.')
+                        print(f'[{url}] 본문 입력 요소를 찾을 수 없습니다. 오류: {str(e)}')
+                    # try:
+                    #     # 명시적 대기를 사용하여 제목 입력 상자가 로드될 때까지 대기
+                    #     subject_box = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "#wr_subject")))
+                    #     subject_box.send_keys(title)
+                    # except Exception as e:
+                    #     self.log_updated.emit(f'[{url}] 제목 입력 요소를 찾을 수 없습니다. 오류: {str(e)}')
+                    #
+                    # try:
+                    #     # 명시적 대기를 사용하여 본문 입력 상자가 로드될 때까지 대기
+                    #     content_box = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "#wr_content")))
+                    #     content_box.send_keys(content)
+                    # except Exception as e:
+                    #     self.log_updated.emit(f'[{url}] 본문 입력 요소를 찾을 수 없습니다. 오류: {str(e)}')
 
                     # try:
                     #     email_box = self.driver.find_element(By.CSS_SELECTOR, "#wr_email")
@@ -420,6 +452,8 @@ class MainWindow(QMainWindow):
             self.overall_delay_input = QLineEdit()
             repeat_label = QLabel('전체 반복 회수')
             self.repeat_input = QLineEdit()
+            self.convert_checkbox = QCheckBox('특수문자 치환')
+
 
             # Set the size policy for the new input boxes
             self.writing_delay_input.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
@@ -434,6 +468,7 @@ class MainWindow(QMainWindow):
             delay_layout.addWidget(self.overall_delay_input)
             delay_layout.addWidget(repeat_label)
             delay_layout.addWidget(self.repeat_input)
+            delay_layout.addWidget(self.convert_checkbox)
 
             self.url_edit_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
             self.add_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
@@ -536,7 +571,7 @@ class MainWindow(QMainWindow):
         self.save_settings()
         urls = self.get_all_urls()
         self.progress_bar.setMaximum(len(urls))
-        self.worker = Worker(urls, int(self.writing_delay_input.text()), int(self.overall_delay_input.text()), int(self.repeat_input.text()))
+        self.worker = Worker(urls, int(self.writing_delay_input.text()), int(self.overall_delay_input.text()), int(self.repeat_input.text()), self.convert_checkbox.isChecked())
         self.worker.progress_updated.connect(self.update_progress)
         self.worker.log_updated.connect(self.add_log)
         self.worker.api_count_updated.connect(self.update_api_count)
