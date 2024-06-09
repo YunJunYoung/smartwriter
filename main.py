@@ -213,6 +213,18 @@ def replace_spaces_with_decoded_unicode(text: str, unicode_file: str) -> str:
     return ''.join(result)
 
 
+def find_login_url(write_url):
+    try:
+        with open('login_urls.json', 'r') as f:
+            data = json.load(f)
+            for entry in data:
+                if entry['write_url'] == write_url:
+                    return entry['login_url']
+    except FileNotFoundError:
+        return None
+    return None
+
+
 class Worker(QThread):
     progress_updated = pyqtSignal(int)
     log_updated = pyqtSignal(str)
@@ -286,9 +298,9 @@ class Worker(QThread):
                     wait = WebDriverWait(self.driver, 3)  # 최대 20초 대기
 
                     if login_need:
-                        login_url = get_login_url(url)
-                        self.driver.get(login_url)
+                        login_url = find_login_url(url) or get_login_url(url)
                         self.log_updated.emit(f'[Index:{k + 1}_{i + 1}] [{login_url}] 로그인 페이지 이동')
+                        self.driver.get(login_url)
 
                         try:
                             id_box = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "#login_id")))
@@ -457,6 +469,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.filename = 'urls.json'
+        self.login_manage_button = QPushButton("로그인주소 관리")
         self.write_button = QPushButton("글쓰기 시작")
         self.api_count = read_api_count()
         self.title_modify_button = QPushButton("변경")
@@ -466,10 +479,11 @@ class MainWindow(QMainWindow):
         self.progress_bar = QProgressBar(self)
         self.log_edit_box = QTextEdit(self)
         self.count_label = None
+        self.url_manager = None
+        self.worker = None
         self.init_ui()
         self.load_settings()
         self.load_urls_from_file(self.filename)
-        self.worker = None
 
     def init_ui(self):
         try:
@@ -542,13 +556,20 @@ class MainWindow(QMainWindow):
 
             main_layout = QVBoxLayout()
             main_layout.addLayout(delay_layout)
-            main_layout.addWidget(self.write_button)
+
+            button_layout = QHBoxLayout()
+            button_layout.addWidget(self.login_manage_button)
+            button_layout.addWidget(self.write_button)
+
+            main_layout.addLayout(button_layout)
 
             self.count_label = QLabel(f"누적 캡챠 호출 횟수 : {self.api_count}", self)
             self.count_label.setAlignment(Qt.AlignCenter)
             main_layout.addWidget(self.count_label)
 
+            self.login_manage_button.clicked.connect(self.on_login_manage_button_click)
             self.write_button.clicked.connect(self.on_write_button_click)
+
             main_layout.addWidget(group_box)
             main_layout.addWidget(self.progress_bar)
 
@@ -592,6 +613,13 @@ class MainWindow(QMainWindow):
         print(formatted_log)
         self.log_edit_box.append(formatted_log)
         self.log_edit_box.verticalScrollBar().setValue(self.log_edit_box.verticalScrollBar().maximum())
+
+    def on_login_manage_button_click(self):
+        try:
+            self.url_manager = URLManager()
+            self.url_manager.show()
+        except Exception as e:
+            print_with_debug(e)
 
     def on_write_button_click(self):
         self.save_settings()
@@ -703,6 +731,103 @@ class MainWindow(QMainWindow):
             return entries
         except Exception as e:
             print_with_debug(e)
+
+
+class URLManager(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.initUI()
+
+    def initUI(self):
+        self.setWindowTitle('URL Manager')
+        self.setGeometry(100, 100, 800, 600)
+        self.centerWindow()
+
+        self.layout = QVBoxLayout()
+
+        self.input_layout = QHBoxLayout()
+        self.write_url_edit = QLineEdit(self)
+        self.write_url_edit.setPlaceholderText('write_url')
+        self.login_url_edit = QLineEdit(self)
+        self.login_url_edit.setPlaceholderText('login_url')
+        self.add_button = QPushButton('추가', self)
+        self.delete_button = QPushButton('삭제', self)
+        self.input_layout.addWidget(self.write_url_edit)
+        self.input_layout.addWidget(self.login_url_edit)
+        self.input_layout.addWidget(self.add_button)
+        self.input_layout.addWidget(self.delete_button)
+
+        self.layout.addLayout(self.input_layout)
+
+        self.table_widget = QTableWidget(self)
+        self.table_widget.setColumnCount(2)
+        self.table_widget.setColumnWidth(0, 400)
+        self.table_widget.setHorizontalHeaderLabels(['write_url', 'login_url'])
+
+        self.table_widget.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.table_widget.verticalHeader().setVisible(False)  # 인덱스 번호 숨기기
+        self.layout.addWidget(self.table_widget)
+
+        self.setLayout(self.layout)
+
+        self.add_button.clicked.connect(self.add_url)
+        self.delete_button.clicked.connect(self.delete_url)
+
+        self.load_data()
+
+    def centerWindow(self):
+        qr = self.frameGeometry()
+        cp = QApplication.desktop().screen().rect().center()
+        qr.moveCenter(cp)
+        self.move(qr.topLeft())
+
+    def add_url(self):
+        write_url = self.write_url_edit.text()
+        login_url = self.login_url_edit.text()
+
+        if write_url and login_url:
+            row_position = self.table_widget.rowCount()
+            self.table_widget.insertRow(row_position)
+            self.table_widget.setItem(row_position, 0, QTableWidgetItem(write_url))
+            self.table_widget.setItem(row_position, 1, QTableWidgetItem(login_url))
+
+            self.save_data()
+
+            self.write_url_edit.clear()
+            self.login_url_edit.clear()
+        else:
+            QMessageBox.warning(self, 'Error', 'Please enter both write_url and login_url')
+
+    def delete_url(self):
+        selected_row = self.table_widget.currentRow()
+        if selected_row >= 0:
+            self.table_widget.removeRow(selected_row)
+            self.save_data()
+        else:
+            QMessageBox.warning(self, 'Error', 'Please select a row to delete')
+
+    def save_data(self):
+        data = []
+        for row in range(self.table_widget.rowCount()):
+            write_url = self.table_widget.item(row, 0).text()
+            login_url = self.table_widget.item(row, 1).text()
+            data.append({'write_url': write_url, 'login_url': login_url})
+
+        with open('login_urls.json', 'w') as f:
+            json.dump(data, f)
+
+    def load_data(self):
+        try:
+            with open('login_urls.json', 'r') as f:
+                data = json.load(f)
+                for entry in data:
+                    row_position = self.table_widget.rowCount()
+                    self.table_widget.insertRow(row_position)
+                    self.table_widget.setItem(row_position, 0, QTableWidgetItem(entry['write_url']))
+                    self.table_widget.setItem(row_position, 1, QTableWidgetItem(entry['login_url']))
+        except FileNotFoundError:
+            with open('login_urls.json', 'w') as f:
+                json.dump([], f)
 
 
 if __name__ == "__main__":
