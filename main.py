@@ -9,7 +9,8 @@ import clipboard
 from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QLineEdit, QMenuBar, \
     QAction, QMessageBox, QMainWindow, QMenu, QProgressBar, QTextEdit, QActionGroup, QSizePolicy, QGroupBox, \
     QTableWidget, \
-    QGridLayout, QTableWidget, QHeaderView, QAbstractItemView, QTableWidgetItem, QCheckBox
+    QGridLayout, QTableWidget, QHeaderView, QAbstractItemView, QTableWidgetItem, QCheckBox, QListWidget, QFileDialog
+
 from PyQt5.QtGui import QIcon
 from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.support.ui import WebDriverWait
@@ -230,7 +231,7 @@ class Worker(QThread):
     log_updated = pyqtSignal(str)
     api_count_updated = pyqtSignal(int)
 
-    def __init__(self, entries, writing_delay, overall_delay, repeat, convert):
+    def __init__(self, entries, writing_delay, overall_delay, repeat, convert, excel_file_list):
         super().__init__()
         self.entries = entries
         self.api_count = read_api_count()
@@ -239,6 +240,8 @@ class Worker(QThread):
         self.repeat = repeat
         self.driver = None
         self.convert = convert
+        self.excel_file_list = excel_file_list
+        self.current_file_index = 0
 
     def init_web_driver(self):
         try:
@@ -252,6 +255,15 @@ class Worker(QThread):
             self.driver.delete_all_cookies()
         except Exception as e:
             print_with_debug(e)
+
+    def get_current_excel_file(self):
+        try:
+            current_file = self.excel_file_list[self.current_file_index]
+            print(f'current_file : {current_file}')
+            return current_file
+        except Exception as e:
+            print_with_debug(e)
+            return None
 
     def set_value_with_javascript(self, element, text):
         try:
@@ -282,6 +294,38 @@ class Worker(QThread):
                 continue  # 다음 셀렉터로 이동
         return iframe_exist
 
+    def starts_with_imweb(self, url):
+        return url.startswith('[imweb]')
+
+    def remove_url_prefix(self, url):
+        if self.starts_with_imweb(url):
+            return url[len('[imweb]'):]
+        return url
+
+    def _set_value_with_javascript(self, driver, element, text):
+        try:
+            # JavaScript를 사용하여 값을 설정하고 입력 이벤트를 트리거합니다.
+            driver.execute_script("""
+            arguments[0].value = arguments[1];
+            arguments[0].dispatchEvent(new Event('input', { bubbles: true }));
+            arguments[0].dispatchEvent(new Event('change', { bubbles: true }));
+            """, element, text)
+            time.sleep(1)
+        except Exception as e:
+            print(f"Error: {e}")
+
+    def set_contenteditable_value(self, driver, element, text):
+        try:
+            # JavaScript를 사용하여 값을 설정합니다.
+            driver.execute_script("""
+                arguments[0].innerHTML = arguments[1];
+                arguments[0].dispatchEvent(new Event('input', { bubbles: true }));
+                arguments[0].dispatchEvent(new Event('change', { bubbles: true }));
+                """, element, text)
+            time.sleep(1)
+        except Exception as e:
+            print(f"Error: {e}")
+
     def run(self):
         for k in range(self.repeat):
             self.log_updated.emit(f'{k + 1}번째 반복 실행')
@@ -290,122 +334,199 @@ class Worker(QThread):
                     url, user_id, password = entry
                     self.init_web_driver()
 
-                    if user_id != '' and password != '':
-                        login_need = True
+                    if self.starts_with_imweb(url):
+                        url = self.remove_url_prefix(url)
+                        self.driver.get(url)
+                        self.log_updated.emit(f'[Index:{k + 1}_{i + 1}] [{url}] 글쓰기 페이지 이동')
+                        time.sleep(3)
+
+                        for _ in range(4):
+                            webdriver.ActionChains(self.driver).send_keys(Keys.TAB).perform()
+                            time.sleep(0.5)  # 각 탭 사이에 약간의 지연을 추가하여 자연스럽게 보이도록 합니다
+
+                        try:
+                            # 요소가 로드될 때까지 대기 (최대 10초)
+                            name_input_element = WebDriverWait(self.driver, 10).until(
+                                EC.presence_of_element_located((By.CSS_SELECTOR, 'input[name="nick"]'))
+                            )
+                            print("Name input element found!")
+
+                            # 요소가 화면에 보이도록 스크롤
+                            self.driver.execute_script("arguments[0].scrollIntoView();", name_input_element)
+
+                            # JavaScript를 사용하여 값을 설정
+                            self._set_value_with_javascript(self.driver, name_input_element, 'ghfkddl')
+                        except Exception as e:
+                            print(f"Error: {e}")
+
+                        try:
+                            # 요소가 로드될 때까지 대기 (최대 10초)
+                            password_input_element = WebDriverWait(self.driver, 10).until(
+                                EC.presence_of_element_located((By.CSS_SELECTOR, 'input[name="secret_pass"]'))
+                            )
+
+                            # 요소가 화면에 보이도록 스크롤
+                            self.driver.execute_script("arguments[0].scrollIntoView();", password_input_element)
+                            self._set_value_with_javascript(self.driver, password_input_element, "1234%^&*")
+                        except Exception as e:
+                            print(f"Error: {e}")
+
+                        title, content = get_random_title_content(self.get_current_excel_file())
+                        try:
+                            # 요소가 로드될 때까지 대기 (최대 10초)
+                            subject_box = WebDriverWait(self.driver, 10).until(
+                                EC.presence_of_element_located(
+                                    (By.XPATH, '//*[@id="post_subject"]'))
+                            )
+                            subject_input_element = self.driver.find_element(By.ID, "post_subject")
+                            self.driver.execute_script("arguments[0].scrollIntoView();", subject_input_element)
+                            self._set_value_with_javascript(self.driver, subject_input_element, title)
+                        except Exception as e:
+                            print(f"Error: {e}")
+
+                        title, content = get_random_title_content(self.get_current_excel_file())
+                        try:
+                            WebDriverWait(self.driver, 10).until(
+                                EC.presence_of_element_located((By.ID, "post_body"))
+                            )
+                            # 실제 입력 요소 찾기
+                            contenteditable_element = WebDriverWait(self.driver, 10).until(
+                                EC.presence_of_element_located((By.CSS_SELECTOR, "#post_body .fr-element.fr-view"))
+                            )
+                            # 요소가 화면에 보이도록 스크롤
+                            self.driver.execute_script("arguments[0].scrollIntoView();", contenteditable_element)
+
+                            # JavaScript를 사용하여 값을 설정
+                            self.set_contenteditable_value(self.driver, contenteditable_element,
+                                                      content)
+                        except Exception as e:
+                            print(f"Error: {e}")
+
+                        try:
+                            # 버튼 찾기 및 클릭
+                            submit_button = WebDriverWait(self.driver, 10).until(
+                                EC.presence_of_element_located((By.CSS_SELECTOR, 'button._save_post.save_post.btn'))
+                            )
+                            self.driver.execute_script("arguments[0].scrollIntoView();", submit_button)
+                            submit_button.click()
+                        except Exception as e:
+                            print(f'[{url}] 작성 버튼을 찾을 수 없습니다. 오류: {str(e)}')
                     else:
-                        login_need = False
+                        if user_id != '' and password != '':
+                            login_need = True
+                        else:
+                            login_need = False
 
-                    wait = WebDriverWait(self.driver, 3)  # 최대 20초 대기
+                        wait = WebDriverWait(self.driver, 3)  # 최대 20초 대기
 
-                    if login_need:
-                        login_url = find_login_url(url) or get_login_url(url)
-                        self.log_updated.emit(f'[Index:{k + 1}_{i + 1}] [{login_url}] 로그인 페이지 이동')
-                        self.driver.get(login_url)
+                        if login_need:
+                            login_url = find_login_url(url) or get_login_url(url)
+                            self.log_updated.emit(f'[Index:{k + 1}_{i + 1}] [{login_url}] 로그인 페이지 이동')
+                            self.driver.get(login_url)
 
+                            try:
+                                id_box = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "#login_id")))
+                                id_box.send_keys(user_id)
+                            except Exception as e:
+                                print_with_debug(e)
+
+                            try:
+                                # 명시적 대기를 사용하여 비밀번호 입력 상자가 로드될 때까지 대기
+                                pw_box = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "#login_pw")))
+                                pw_box.send_keys(password)
+                            except Exception as e:
+                                print_with_debug(e)
+
+                            # 시도할 로그인 버튼의 CSS 선택자 리스트
+                            login_selectors = [
+                                "#login_fs > input.btn_submit",
+                                "#login_fs > button",
+                                "#login_frm > input.btn_submit",
+                                "#mb_login > form > div:nth-child(7) > button"
+                            ]
+
+                            login_button = None
+
+                            for selector in login_selectors:
+                                try:
+                                    login_button = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, selector)))
+                                    login_button.click()
+                                    break  # 로그인 버튼을 찾고 클릭한 후 반복문 탈출
+                                except TimeoutException:
+                                    continue  # 현재 선택자로 로그인 버튼을 찾지 못한 경우 다음 선택자로 시도
+
+                            time.sleep(1)
+
+                        self.driver.get(url)
+                        self.log_updated.emit(f'[Index:{k + 1}_{i + 1}] [{url}] 글쓰기 페이지 이동')
+
+                        if login_need is False:
+                            try:
+                                name_box = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "#wr_name")))
+                                name_box.send_keys(generate_korean_name())
+                            except Exception as e:
+                                self.log_updated.emit(f'[{url}] 이름 입력 요소를 찾을 수 없습니다.')
+
+                            try:
+                                phone_box = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "#wr_homepage")))
+                                phone_box.send_keys(generate_korean_phone_number())
+                            except Exception as e:
+                                self.log_updated.emit(f'[{url}] 전화번호 입력 요소를 찾을 수 없습니다.')
+
+                            try:
+                                password_box = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "#wr_password")))
+                                password_box.send_keys("password1")
+                            except Exception as e:
+                                self.log_updated.emit(f'[{url}] 비밀번호 입력 요소를 찾을 수 없습니다.')
+
+                            try:
+                                email_box = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "#wr_email")))
+                                email_box.send_keys("test@naver.com")
+                            except Exception as e:
+                                self.log_updated.emit(f'[{url}] 이메일 입력 요소를 찾을 수 없습니다.')
+
+                        #title, content = get_random_title_content(excel_file_path)
+                        title, content = get_random_title_content(self.get_current_excel_file())
+                        if self.convert:
+                            title = replace_spaces_with_decoded_unicode(title, 'special_char.json')
                         try:
-                            id_box = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "#login_id")))
-                            id_box.send_keys(user_id)
+                            subject_box = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "#wr_subject")))
+                            self.set_value_with_javascript(subject_box, title)
                         except Exception as e:
-                            print_with_debug(e)
+                            print(f'[{url}] 제목 입력 요소를 찾을 수 없습니다. 오류: {str(e)}')
 
-                        try:
-                            # 명시적 대기를 사용하여 비밀번호 입력 상자가 로드될 때까지 대기
-                            pw_box = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "#login_pw")))
-                            pw_box.send_keys(password)
-                        except Exception as e:
-                            print_with_debug(e)
-
-                        # 시도할 로그인 버튼의 CSS 선택자 리스트
-                        login_selectors = [
-                            "#login_fs > input.btn_submit",
-                            "#login_fs > button",
-                            "#login_frm > input.btn_submit",
-                            "#mb_login > form > div:nth-child(7) > button"
+                        iframe_selectors = [
+                            '#fwrite > ul > li:nth-child(4) > iframe',
+                            '#fwrite > div:nth-child(16) > div > iframe'
+                            # 필요에 따라 여기에 더 많은 셀렉터를 추가할 수 있습니다.
                         ]
 
-                        login_button = None
-
-                        for selector in login_selectors:
+                        # iframe이 있는지 확인하고 전환
+                        iframe_exist = self.switch_to_iframe_if_exists(iframe_selectors)
+                        if iframe_exist:
                             try:
-                                login_button = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, selector)))
-                                login_button.click()
-                                break  # 로그인 버튼을 찾고 클릭한 후 반복문 탈출
-                            except TimeoutException:
-                                continue  # 현재 선택자로 로그인 버튼을 찾지 못한 경우 다음 선택자로 시도
+                                html_selector = '#smart_editor2_content > div.se2_conversion_mode > ul > li:nth-child(2) > button'
+                                self.driver.find_element(By.CSS_SELECTOR, html_selector).click()
+                                pyperclip.copy(content)
+                                ActionChains(self.driver).key_down(Keys.CONTROL).send_keys('v').key_up(
+                                    Keys.CONTROL).perform()
+                                self.driver.switch_to.default_content()
+                            except Exception as e:
+                                self.log_updated.emit(f'[{url}] iframe 내 본문/제목 요소를 찾을 수 없습니다.')
+                        else:
+                            try:
+                                content_box = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "#wr_content")))
+                                self.driver.execute_script("arguments[0].scrollIntoView();", content_box)
+                                self.set_value_with_clipboard(content_box, content)
+                            except Exception as e:
+                                print(f'[{url}] 본문 입력 요소를 찾을 수 없습니다. 오류: {str(e)}')
 
-                        time.sleep(1)
+                        self.write_contents(url, login_need)
 
-                    self.driver.get(url)
-                    self.log_updated.emit(f'[Index:{k + 1}_{i + 1}] [{url}] 글쓰기 페이지 이동')
-
-                    if login_need is False:
-                        try:
-                            name_box = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "#wr_name")))
-                            name_box.send_keys(generate_korean_name())
-                        except Exception as e:
-                            self.log_updated.emit(f'[{url}] 이름 입력 요소를 찾을 수 없습니다.')
-
-                        try:
-                            phone_box = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "#wr_homepage")))
-                            phone_box.send_keys(generate_korean_phone_number())
-                        except Exception as e:
-                            self.log_updated.emit(f'[{url}] 전화번호 입력 요소를 찾을 수 없습니다.')
-
-                        try:
-                            password_box = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "#wr_password")))
-                            password_box.send_keys("password1")
-                        except Exception as e:
-                            self.log_updated.emit(f'[{url}] 비밀번호 입력 요소를 찾을 수 없습니다.')
-
-                        try:
-                            email_box = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "#wr_email")))
-                            email_box.send_keys("test@naver.com")
-                        except Exception as e:
-                            self.log_updated.emit(f'[{url}] 이메일 입력 요소를 찾을 수 없습니다.')
-
-                    title, content = get_random_title_content(excel_file_path)
-                    if self.convert:
-                        title = replace_spaces_with_decoded_unicode(title, 'special_char.json')
-
-                    try:
-                        subject_box = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "#wr_subject")))
-                        #self.set_value_with_clipboard(subject_box, title)
-                        self.set_value_with_javascript(subject_box, title)
-                    except Exception as e:
-                        print(f'[{url}] 제목 입력 요소를 찾을 수 없습니다. 오류: {str(e)}')
-
-                    iframe_selectors = [
-                        '#fwrite > ul > li:nth-child(4) > iframe',
-                        '#fwrite > div:nth-child(16) > div > iframe'
-                        # 필요에 따라 여기에 더 많은 셀렉터를 추가할 수 있습니다.
-                    ]
-
-                    # iframe이 있는지 확인하고 전환
-                    iframe_exist = self.switch_to_iframe_if_exists(iframe_selectors)
-                    if iframe_exist:
-                        try:
-                            html_selector = '#smart_editor2_content > div.se2_conversion_mode > ul > li:nth-child(2) > button'
-                            self.driver.find_element(By.CSS_SELECTOR, html_selector).click()
-                            pyperclip.copy(content)
-                            ActionChains(self.driver).key_down(Keys.CONTROL).send_keys('v').key_up(
-                                Keys.CONTROL).perform()
-                            self.driver.switch_to.default_content()
-                        except Exception as e:
-                            self.log_updated.emit(f'[{url}] iframe 내 본문/제목 요소를 찾을 수 없습니다.')
-                    else:
-                        try:
-                            content_box = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "#wr_content")))
-                            self.driver.execute_script("arguments[0].scrollIntoView();", content_box)
-                            self.set_value_with_clipboard(content_box, content)
-                        except Exception as e:
-                            print(f'[{url}] 본문 입력 요소를 찾을 수 없습니다. 오류: {str(e)}')
-
-                    self.write_contents(url, login_need)
                     time.sleep(5)
                     self.log_updated.emit(f'[Index:{k + 1}_{i + 1}] [{url}] 글쓰기 완료')
                     self.progress_updated.emit(i + 1)
                     self.driver.quit()
-
                     if i + 1 != len(self.entries):
                         self.log_updated.emit(f'다음 글쓰기 까지 {self.writing_delay}초 대기')
                         time.sleep(self.writing_delay)
@@ -415,6 +536,7 @@ class Worker(QThread):
                 except Exception as e:
                     print_with_debug(e)
             self.log_updated.emit(f'다음 반복 까지 {self.overall_delay}초 대기')
+            self.current_file_index = (self.current_file_index + 1) % len(self.excel_file_list)
             time.sleep(self.overall_delay)
         self.driver.quit()
 
@@ -483,6 +605,7 @@ class MainWindow(QMainWindow):
         self.worker = None
         self.init_ui()
         self.load_settings()
+        self.loadFilePaths()
         self.load_urls_from_file(self.filename)
 
     def init_ui(self):
@@ -538,7 +661,7 @@ class MainWindow(QMainWindow):
             self.url_table_widget.setHorizontalHeaderLabels(['URL', 'ID', 'PW'])
             self.url_table_widget.setSelectionBehavior(QTableWidget.SelectRows)
             self.url_table_widget.setSelectionMode(QTableWidget.ExtendedSelection)
-            self.url_table_widget.setColumnWidth(0, 550)
+            self.url_table_widget.setColumnWidth(0, 800)
             self.url_table_widget.setColumnWidth(1, 100)
             self.url_table_widget.verticalHeader().setVisible(False)
 
@@ -549,7 +672,6 @@ class MainWindow(QMainWindow):
             group_box = QGroupBox()
             group_box.setStyleSheet("QGroupBox { border: 1px solid gray; }")
             group_box.setLayout(inner_layout)
-
 
             self.add_button.clicked.connect(self.on_add_button_click)
             self.delete_button.clicked.connect(self.on_delete_button_click)
@@ -570,8 +692,16 @@ class MainWindow(QMainWindow):
             self.login_manage_button.clicked.connect(self.on_login_manage_button_click)
             self.write_button.clicked.connect(self.on_write_button_click)
 
+            load_excel_button = QPushButton('엑셀 불러오기')
+            load_excel_button.clicked.connect(self.on_load_excel_button)
+
+            self.listBox = QListWidget(self)
+            self.listBox.setFixedHeight(100)
+
             main_layout.addWidget(group_box)
             main_layout.addWidget(self.progress_bar)
+            main_layout.addWidget(load_excel_button)
+            main_layout.addWidget(self.listBox)
 
             self.log_edit_box.setReadOnly(True)  # 읽기 전용으로 설정
             self.log_edit_box.setFixedHeight(150)  # 높이 설정
@@ -580,12 +710,19 @@ class MainWindow(QMainWindow):
             container = QWidget()
             container.setLayout(main_layout)
             self.setCentralWidget(container)
-            self.resize(800, 800)
+            self.resize(1200, 800)
             x, y = get_center_position(self.width(), self.height())
             self.move(x, y)
             self.add_log('프로그램 시작')
         except Exception as e:
             print_with_debug(e)
+
+    def getFileList(self):
+        try:
+            return [self.listBox.item(i).text() for i in range(self.listBox.count())]
+        except Exception as e:
+            print_with_debug(e)
+            return 0
 
     def save_settings(self):
         settings = {
@@ -614,6 +751,44 @@ class MainWindow(QMainWindow):
         self.log_edit_box.append(formatted_log)
         self.log_edit_box.verticalScrollBar().setValue(self.log_edit_box.verticalScrollBar().maximum())
 
+    def addFilePaths(self, filePaths):
+        try:
+            for filePath in filePaths:
+                if filePath not in [self.listBox.item(i).text() for i in range(self.listBox.count())]:
+                    self.listBox.addItem(filePath)
+            self.saveFilePaths()
+        except Exception as e:
+            print_with_debug(e)
+
+    def saveFilePaths(self):
+        try:
+            filePaths = [self.listBox.item(i).text() for i in range(self.listBox.count())]
+            with open('file_paths.json', 'w') as file:
+                json.dump(filePaths, file)
+        except Exception as e:
+            print_with_debug(e)
+
+    def loadFilePaths(self):
+        try:
+            with open('file_paths.json', 'r') as file:
+                filePaths = json.load(file)
+                self.addFilePaths(filePaths)
+        except (FileNotFoundError, json.JSONDecodeError):
+            pass
+
+    def on_load_excel_button(self):
+        try:
+            options = QFileDialog.Options()
+            options |= QFileDialog.DontUseNativeDialog
+            files, _ = QFileDialog.getOpenFileNames(self, "Select Excel Files", "",
+                                                    "Excel Files (*.xlsx *.xls);;All Files (*)", options=options)
+
+            self.listBox.clear()
+            if files:
+                self.addFilePaths(files)
+        except Exception as e:
+            print_with_debug(e)
+
     def on_login_manage_button_click(self):
         try:
             self.url_manager = URLManager()
@@ -626,7 +801,7 @@ class MainWindow(QMainWindow):
         entries = self.get_all_entries()
         self.progress_bar.setMaximum(len(entries))
         self.worker = Worker(entries, int(self.writing_delay_input.text()), int(self.overall_delay_input.text()),
-                             int(self.repeat_input.text()), self.convert_checkbox.isChecked())
+                             int(self.repeat_input.text()), self.convert_checkbox.isChecked(), self.getFileList())
         self.worker.progress_updated.connect(self.update_progress)
         self.worker.log_updated.connect(self.add_log)
         self.worker.api_count_updated.connect(self.update_api_count)
