@@ -30,6 +30,7 @@ from selenium.webdriver.common.by import By
 from selenium.common.exceptions import UnexpectedAlertPresentException
 from selenium.common.exceptions import NoSuchElementException
 from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.support.ui import Select
 import requests
 import time
 from twocaptcha.solver import TwoCaptcha
@@ -439,6 +440,7 @@ class Worker(QThread):
 
                             # 시도할 로그인 버튼의 CSS 선택자 리스트
                             login_selectors = [
+                                "#login_fs > div.btn_wrap > button",
                                 "#login_fs > input.btn_submit",
                                 "#login_fs > button",
                                 "#login_frm > input.btn_submit",
@@ -485,7 +487,19 @@ class Worker(QThread):
                             except Exception as e:
                                 self.log_updated.emit(f'[{url}] 이메일 입력 요소를 찾을 수 없습니다.')
 
-                        #title, content = get_random_title_content(excel_file_path)
+                        try:
+                            ca_name_element = WebDriverWait(self.driver, 10).until(
+                                EC.presence_of_element_located((By.ID, "ca_name"))
+                            )
+
+                            # Select 객체 생성
+                            select = Select(ca_name_element)
+                            select.select_by_index(1)
+                            print("첫 번째 항목이 성공적으로 선택되었습니다.")
+                        except:
+                            print("ca_name 요소가 존재하지 않습니다.")
+
+
                         title, content = get_random_title_content(self.get_current_excel_file())
                         if self.convert:
                             title = replace_spaces_with_decoded_unicode(title, 'special_char.json')
@@ -541,6 +555,13 @@ class Worker(QThread):
         self.driver.quit()
 
     def write_contents(self, url, login_need):
+        captcha_url_list = [
+            'http://www.djcentum.com/bbs/write.php?bo_table=counsel',
+        ]
+
+        if url in captcha_url_list:
+            login_need = False
+
         if login_need is False:
             try:
                 captcha_img = self.driver.find_element(By.CSS_SELECTOR, "#captcha_img")
@@ -573,6 +594,8 @@ class Worker(QThread):
                         captcha_box.send_keys(number)
             except NoSuchElementException:
                 print("Captcha image not found. Skipping captcha solving.")
+
+        time.sleep(10)
 
         try:
             wait = WebDriverWait(self.driver, 3)
