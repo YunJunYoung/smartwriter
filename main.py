@@ -8,7 +8,7 @@ import clipboard
 
 from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QLineEdit, QMenuBar, \
     QAction, QMessageBox, QMainWindow, QMenu, QProgressBar, QTextEdit, QActionGroup, QSizePolicy, QGroupBox, \
-    QTableWidget, \
+    QTableWidget, QComboBox, \
     QGridLayout, QTableWidget, QHeaderView, QAbstractItemView, QTableWidgetItem, QCheckBox, QListWidget, QFileDialog
 
 from PyQt5.QtGui import QIcon
@@ -59,6 +59,25 @@ def generate_korean_name():
         name += chr(0xAC00 + (chosung.index(ch) * 588) + (jungsung.index(ju) * 28) + jongsung.index(jo))
 
     return name
+
+
+def generate_english_name():
+    consonants = "bcdfghjklmnpqrstvwxyz"
+    vowels = "aeiou"
+
+    # 이름 길이는 6~8 글자로 랜덤하게 선택
+    name_length = random.choice(range(6, 9))
+    name = ''
+
+    # 자음과 모음을 번갈아가면서 생성
+    for i in range(name_length):
+        if i % 2 == 0:  # 짝수 위치에는 자음
+            name += random.choice(consonants)
+        else:  # 홀수 위치에는 모음
+            name += random.choice(vowels)
+
+    # 첫 글자는 대문자로 변환
+    return name.capitalize()
 
 
 def generate_korean_phone_number():
@@ -232,7 +251,7 @@ class Worker(QThread):
     log_updated = pyqtSignal(str)
     api_count_updated = pyqtSignal(int)
 
-    def __init__(self, entries, writing_delay, overall_delay, repeat, convert, excel_file_list):
+    def __init__(self, entries, writing_delay, overall_delay, repeat, convert, excel_file_list, name_language):
         super().__init__()
         self.entries = entries
         self.api_count = read_api_count()
@@ -243,6 +262,7 @@ class Worker(QThread):
         self.convert = convert
         self.excel_file_list = excel_file_list
         self.current_file_index = 0
+        self.name_language = name_language
 
     def init_web_driver(self):
         try:
@@ -350,13 +370,16 @@ class Worker(QThread):
                             name_input_element = WebDriverWait(self.driver, 10).until(
                                 EC.presence_of_element_located((By.CSS_SELECTOR, 'input[name="nick"]'))
                             )
-                            print("Name input element found!")
 
                             # 요소가 화면에 보이도록 스크롤
                             self.driver.execute_script("arguments[0].scrollIntoView();", name_input_element)
+                            if self.name_language == '한글':
+                                name = generate_korean_name()
+                            else:
+                                name = generate_english_name()
 
                             # JavaScript를 사용하여 값을 설정
-                            self._set_value_with_javascript(self.driver, name_input_element, 'ghfkddl')
+                            self._set_value_with_javascript(self.driver, name_input_element, name)
                         except Exception as e:
                             print(f"Error: {e}")
 
@@ -448,7 +471,6 @@ class Worker(QThread):
                             ]
 
                             login_button = None
-
                             for selector in login_selectors:
                                 try:
                                     login_button = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, selector)))
@@ -465,7 +487,12 @@ class Worker(QThread):
                         if login_need is False:
                             try:
                                 name_box = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "#wr_name")))
-                                name_box.send_keys(generate_korean_name())
+
+                                if self.name_language == '한글':
+                                    name = generate_korean_name()
+                                else:
+                                    name = generate_english_name()
+                                name_box.send_keys(name)
                             except Exception as e:
                                 self.log_updated.emit(f'[{url}] 이름 입력 요소를 찾을 수 없습니다.')
 
@@ -643,6 +670,9 @@ class MainWindow(QMainWindow):
             repeat_label = QLabel('전체 반복 회수')
             self.repeat_input = QLineEdit()
             self.convert_checkbox = QCheckBox('특수문자 치환')
+            name_language_label = QLabel('이름 언어')
+            self.name_language_combo_box = QComboBox()
+            self.name_language_combo_box.addItems(['한글', '영어'])
 
             # Set the size policy for the new input boxes
             self.writing_delay_input.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
@@ -651,6 +681,8 @@ class MainWindow(QMainWindow):
 
             # Create a layout for the new input boxes and labels
             delay_layout = QHBoxLayout()
+            delay_layout.addWidget(name_language_label)
+            delay_layout.addWidget(self.name_language_combo_box)
             delay_layout.addWidget(writing_delay_label)
             delay_layout.addWidget(self.writing_delay_input)
             delay_layout.addWidget(overall_delay_label)
@@ -658,7 +690,6 @@ class MainWindow(QMainWindow):
             delay_layout.addWidget(repeat_label)
             delay_layout.addWidget(self.repeat_input)
             delay_layout.addWidget(self.convert_checkbox)
-
 
             self.add_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
             self.delete_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
@@ -824,7 +855,8 @@ class MainWindow(QMainWindow):
         entries = self.get_all_entries()
         self.progress_bar.setMaximum(len(entries))
         self.worker = Worker(entries, int(self.writing_delay_input.text()), int(self.overall_delay_input.text()),
-                             int(self.repeat_input.text()), self.convert_checkbox.isChecked(), self.getFileList())
+                             int(self.repeat_input.text()), self.convert_checkbox.isChecked(), self.getFileList(),
+                             self.name_language_combo_box.currentText())
         self.worker.progress_updated.connect(self.update_progress)
         self.worker.log_updated.connect(self.add_log)
         self.worker.api_count_updated.connect(self.update_api_count)
