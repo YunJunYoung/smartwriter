@@ -80,6 +80,40 @@ def generate_english_name():
     return name.capitalize()
 
 
+def is_file_name(input_string):
+    # 파일 이름인 경우 마지막이 .txt로 끝나는지 체크
+    if input_string.endswith('.txt'):
+        return True
+    else:
+        return False
+
+
+def read_whole_text(file_path):
+    try:
+        # 현재 스크립트의 경로를 가져옵니다.
+        current_dir = os.path.dirname(__file__)
+
+        # txt 폴더 아래의 파일 경로를 만듭니다.
+        full_path = os.path.join(current_dir, 'txt', file_path)
+
+        with open(full_path, 'r', encoding='utf-8') as file:
+            content = file.read()
+            return content
+    except FileNotFoundError:
+        return f"File not found: {full_path}"
+    except Exception as e:
+        return f"Error reading file: {str(e)}"
+
+def text_to_html(text):
+    try:
+        #html_content = "<html>\n<body>\n"
+        html_content = text.replace('\n', '<br>\n')
+        #html_content += "\n</body>\n</html>"
+        return html_content
+    except Exception as e:
+        print_with_debug(e)
+
+
 def generate_korean_phone_number():
     # 010-으로 시작
     phone_number = "010-"
@@ -180,19 +214,28 @@ def read_excel_data(file_path):
 
     titles = data['제목'].tolist()  # 제목 열을 리스트로 변환
     contents = data['내용'].tolist()  # 내용 열을 리스트로 변환
+    img_urls = data['이미지URL'].tolist()  # 이미지URL 열을 리스트로 변환
 
-    return titles, contents
+    return titles, contents, img_urls
 
 
 def get_random_title_content(file_path):
-    titles, contents = read_excel_data(file_path)
+    titles, contents, img_urls = read_excel_data(file_path)
 
     if len(titles) != len(contents):
         raise ValueError("Titles and contents lists must be of the same length")
 
     random_index = random.randint(0, len(titles) - 1)
 
-    return titles[random_index], contents[random_index]
+    title = titles[random_index]
+    content = contents[random_index]
+    img_url = img_urls[random_index]
+
+    # img_url이 nan인지 확인하여 None으로 변경
+    if pd.isna(img_url):
+        img_url = None
+
+    return title, content, img_url
 
 
 # 엑셀 파일 경로
@@ -395,7 +438,8 @@ class Worker(QThread):
                         except Exception as e:
                             print(f"Error: {e}")
 
-                        title, content = get_random_title_content(self.get_current_excel_file())
+                        title, content, img_url = get_random_title_content(self.get_current_excel_file())
+
                         try:
                             # 요소가 로드될 때까지 대기 (최대 10초)
                             subject_box = WebDriverWait(self.driver, 10).until(
@@ -408,21 +452,35 @@ class Worker(QThread):
                         except Exception as e:
                             print(f"Error: {e}")
 
-                        title, content = get_random_title_content(self.get_current_excel_file())
                         try:
-                            WebDriverWait(self.driver, 10).until(
-                                EC.presence_of_element_located((By.ID, "post_body"))
+                            html_button = WebDriverWait(self.driver, 10).until(
+                                EC.presence_of_element_located((By.ID, "html-1"))
                             )
-                            # 실제 입력 요소 찾기
-                            contenteditable_element = WebDriverWait(self.driver, 10).until(
-                                EC.presence_of_element_located((By.CSS_SELECTOR, "#post_body .fr-element.fr-view"))
-                            )
-                            # 요소가 화면에 보이도록 스크롤
-                            self.driver.execute_script("arguments[0].scrollIntoView();", contenteditable_element)
+                            # 버튼 클릭
+                            html_button.click()
+                        except Exception as e:
+                            print(f"Error: {e}")
 
-                            # JavaScript를 사용하여 값을 설정
-                            self.set_contenteditable_value(self.driver, contenteditable_element,
-                                                      content)
+                        try:
+                            if is_file_name(content):
+                                text_content = read_whole_text(content)
+                                content = text_to_html(text_content)
+
+                            if img_url:
+                                edit_content = f"<img src=\"{img_url}\"><p>{content}</p>"
+                            else:
+                                edit_content = f"<p>{content}</p>"
+                            print(f'edit_content : {edit_content}')
+
+                            wait = WebDriverWait(self.driver, 10)
+                            code_mirror_element = wait.until(
+                                EC.presence_of_element_located((By.CLASS_NAME, "CodeMirror"))
+                            )
+
+                            self.driver.execute_script("""
+                                var editor = arguments[0].CodeMirror;
+                                editor.setValue(arguments[1]);
+                            """, code_mirror_element, edit_content)
                         except Exception as e:
                             print(f"Error: {e}")
 
@@ -526,8 +584,7 @@ class Worker(QThread):
                         except:
                             print("ca_name 요소가 존재하지 않습니다.")
 
-
-                        title, content = get_random_title_content(self.get_current_excel_file())
+                        title, content, img_url = get_random_title_content(self.get_current_excel_file())
                         if self.convert:
                             title = replace_spaces_with_decoded_unicode(title, 'special_char.json')
                         try:
@@ -580,6 +637,7 @@ class Worker(QThread):
             self.current_file_index = (self.current_file_index + 1) % len(self.excel_file_list)
             time.sleep(self.overall_delay)
         self.driver.quit()
+
 
     def write_contents(self, url, login_need):
         captcha_url_list = [
