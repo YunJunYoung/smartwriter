@@ -749,6 +749,8 @@ class MainWindow(QMainWindow):
             delay_layout.addWidget(self.repeat_input)
             delay_layout.addWidget(self.convert_checkbox)
 
+            self.load_from_file_button = QPushButton('파일에서 불러오기')
+            self.load_from_file_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
             self.add_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
             self.delete_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
 
@@ -764,6 +766,7 @@ class MainWindow(QMainWindow):
             inner_layout_top_layout.addWidget(self.id_edit_box, stretch=2)
             inner_layout_top_layout.addWidget(QLabel('PW:'))
             inner_layout_top_layout.addWidget(self.pw_edit_box, stretch=2)
+            inner_layout_top_layout.addWidget(self.load_from_file_button, stretch=1)
             inner_layout_top_layout.addWidget(self.add_button, stretch=1)
             inner_layout_top_layout.addWidget(self.delete_button, stretch=1)
 
@@ -785,6 +788,7 @@ class MainWindow(QMainWindow):
             group_box.setStyleSheet("QGroupBox { border: 1px solid gray; }")
             group_box.setLayout(inner_layout)
 
+            self.load_from_file_button.clicked.connect(self.on_load_from_file_button_click)
             self.add_button.clicked.connect(self.on_add_button_click)
             self.delete_button.clicked.connect(self.on_delete_button_click)
 
@@ -926,6 +930,33 @@ class MainWindow(QMainWindow):
     def update_api_count(self, count):
         self.api_count = count
         self.count_label.setText(f"누적 캡챠 호출 횟수 : {self.api_count}")
+
+    def read_text_file(self, file_name):
+        with open(file_name, 'r', encoding='utf-8') as file:
+            lines = file.read().splitlines()
+        return lines
+    def on_load_from_file_button_click(self):
+        try:
+            options = QFileDialog.Options()
+            options |= QFileDialog.DontUseNativeDialog
+            file_name, _ = QFileDialog.getOpenFileName(self, "Open Text File", "", "Text Files (*.txt)",
+                                                       options=options)
+
+            if file_name:
+                text_list = self.read_text_file(file_name)
+                print("Contents of file as list:")
+
+                for url in text_list:
+                    row_position = self.url_table_widget.rowCount()
+                    self.url_table_widget.insertRow(row_position)
+                    url_item = QTableWidgetItem(url)
+                    url_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)  # Read-only 설정
+                    self.url_table_widget.setItem(row_position, 0, url_item)
+
+                self.write_urls_to_file(self.filename)
+
+        except Exception as e:
+            print_with_debug(e)
 
     def on_add_button_click(self):
         try:
