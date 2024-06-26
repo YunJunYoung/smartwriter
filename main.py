@@ -438,6 +438,50 @@ class Worker(QThread):
                         except Exception as e:
                             print(f"Error: {e}")
 
+                        try:
+                            # 드롭다운 메뉴를 여는 요소를 클릭
+                            category_select = WebDriverWait(self.driver, 10).until(
+                                EC.element_to_be_clickable((By.CSS_SELECTOR,
+                                                            '.schedule_name .icon-select._category_type_list .div_select.category_select'))
+                            )
+                            category_select.click()
+
+                            # 드롭다운 메뉴의 항목들이 로드될 때까지 대기
+                            WebDriverWait(self.driver, 10).until(
+                                EC.presence_of_all_elements_located(
+                                    (By.CSS_SELECTOR, '.category_dropdown._select_option .tse-scroll-content ul li'))
+                            )
+
+                            # JavaScript를 사용하여 드롭다운 메뉴의 두 번째 항목을 클릭
+                            self.driver.execute_script("""
+                                    var dropdownMenu = document.querySelector('.category_dropdown._select_option .tse-scroll-content ul');
+                                    var items = dropdownMenu.getElementsByTagName('li');
+                                    if (items.length > 1) {
+                                        var secondItem = items[1]; // 두 번째 항목
+
+                                        var mousedownEvent = new MouseEvent('mousedown', {
+                                            view: window,
+                                            bubbles: true,
+                                            cancelable: true
+                                        });
+
+                                        var mouseupEvent = new MouseEvent('mouseup', {
+                                            view: window,
+                                            bubbles: true,
+                                            cancelable: true
+                                        });
+
+                                        secondItem.dispatchEvent(mousedownEvent);
+                                        secondItem.dispatchEvent(mouseupEvent);
+                                        secondItem.click(); // 두 번째 항목 클릭
+                                    } else {
+                                        throw new Error("두 번째 항목을 찾을 수 없습니다.");
+                                    }
+                                """)
+
+                        except Exception as e:
+                            print(f"Error: {e}")
+
                         title, content, img_url = get_random_title_content(self.get_current_excel_file())
 
                         try:
