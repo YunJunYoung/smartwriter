@@ -5,6 +5,7 @@ import json
 import re
 import urllib.parse
 import clipboard
+import zipfile
 
 from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QLineEdit, QMenuBar, \
     QAction, QMessageBox, QMainWindow, QMenu, QProgressBar, QTextEdit, QActionGroup, QSizePolicy, QGroupBox, \
@@ -37,6 +38,7 @@ from twocaptcha.solver import TwoCaptcha
 import pandas as pd
 import pyperclip
 from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.common.proxy import Proxy, ProxyType
 
 import random
 
@@ -46,6 +48,72 @@ jungsung = ['ㅏ', 'ㅐ', 'ㅑ', 'ㅒ', 'ㅓ', 'ㅔ', 'ㅕ', 'ㅖ', 'ㅗ', 'ㅘ'
 jongsung = [''] + ['ㄱ', 'ㄲ', 'ㄳ', 'ㄴ', 'ㄵ', 'ㄶ', 'ㄷ', 'ㄹ', 'ㄺ', 'ㄻ', 'ㄼ', 'ㄽ', 'ㄾ', 'ㄿ', 'ㅀ', 'ㅁ', 'ㅂ', 'ㅄ', 'ㅅ', 'ㅆ',
                    'ㅇ', 'ㅈ', 'ㅊ', 'ㅋ', 'ㅌ', 'ㅍ', 'ㅎ']
 
+
+PROXY_USE = True
+
+def create_proxy_extension(proxy_host, proxy_port, proxy_user, proxy_pass):
+    # manifest.json 내용
+    manifest_json = """
+    {
+        "version": "1.0.0",
+        "manifest_version": 2,
+        "name": "Chrome Proxy",
+        "permissions": [
+            "proxy",
+            "tabs",
+            "unlimitedStorage",
+            "storage",
+            "<all_urls>",
+            "webRequest",
+            "webRequestBlocking"
+        ],
+        "background": {
+            "scripts": ["background.js"]
+        },
+        "minimum_chrome_version":"22.0.0"
+    }
+    """
+
+    # background.js 내용
+    background_js = """
+    var config = {
+            mode: "fixed_servers",
+            rules: {
+                singleProxy: {
+                    scheme: "http",
+                    host: "%s",
+                    port: parseInt(%s)
+                },
+                bypassList: ["localhost"]
+            }
+        };
+
+    chrome.proxy.settings.set({value: config, scope: "regular"}, function() {});
+
+    function callbackFn(details) {
+        return {
+            authCredentials: {
+                username: "%s",
+                password: "%s"
+            }
+        };
+    }
+
+    chrome.webRequest.onAuthRequired.addListener(
+                callbackFn,
+                {urls: ["<all_urls>"]},
+                ['blocking']
+    );
+    """ % (proxy_host, proxy_port, proxy_user, proxy_pass)
+
+    # 확장 프로그램 파일 생성
+    pluginfile = 'proxy_auth_plugin.zip'
+
+    with zipfile.ZipFile(pluginfile, 'w') as zp:
+        zp.writestr("manifest.json", manifest_json)
+        zp.writestr("background.js", background_js)
+
+    return pluginfile
 
 def generate_korean_name():
     name_length = random.choice([3, 4])  # 이름 길이를 3 또는 4로 랜덤하게 선택
@@ -294,7 +362,8 @@ class Worker(QThread):
     log_updated = pyqtSignal(str)
     api_count_updated = pyqtSignal(int)
 
-    def __init__(self, entries, writing_delay, overall_delay, repeat, convert, excel_file_list, name_language):
+    def __init__(self, entries, writing_delay, overall_delay, repeat, convert, excel_file_list, name_language,
+                 use_proxy):
         super().__init__()
         self.entries = entries
         self.api_count = read_api_count()
@@ -306,6 +375,7 @@ class Worker(QThread):
         self.excel_file_list = excel_file_list
         self.current_file_index = 0
         self.name_language = name_language
+        self.use_proxy = use_proxy
 
     def init_web_driver(self):
         try:
@@ -314,6 +384,16 @@ class Worker(QThread):
             options.add_argument("--start-maximized")
             options.add_argument(
                 f"user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36 Edg/91.0.864.59")
+
+            if self.use_proxy:
+                self.log_updated.emit('프록시 적용 중')
+                proxy_host = 'gate.dc.smartproxy.com'
+                proxy_port = '20000'
+                proxy_user = 'sp5xuq4gr3'
+                proxy_pass = '+Dlagoon0304'
+                proxy_extension = create_proxy_extension(proxy_host, proxy_port, proxy_user, proxy_pass)
+                options.add_extension(proxy_extension)
+
             self.driver = webdriver.Chrome(service=Service(chrome_driver_path), options=options)
             self.driver.implicitly_wait(3)
             self.driver.delete_all_cookies()
@@ -323,7 +403,6 @@ class Worker(QThread):
     def get_current_excel_file(self):
         try:
             current_file = self.excel_file_list[self.current_file_index]
-            print(f'current_file : {current_file}')
             return current_file
         except Exception as e:
             print_with_debug(e)
@@ -351,7 +430,6 @@ class Worker(QThread):
                 iframe = self.driver.find_element(By.CSS_SELECTOR, selector)
                 self.driver.switch_to.frame(iframe)
                 iframe_exist = True
-                print(f'Switched to iframe using selector: {selector}')
                 break  # 첫 번째로 발견한 iframe으로 전환 후 종료
             except Exception as e:
                 print(f'No iframe found with selector: {selector}')
@@ -772,6 +850,7 @@ class MainWindow(QMainWindow):
             repeat_label = QLabel('전체 반복 회수')
             self.repeat_input = QLineEdit()
             self.convert_checkbox = QCheckBox('특수문자 치환')
+            self.use_proxy_checkbox = QCheckBox('프록시 사용')
             name_language_label = QLabel('이름 언어')
             self.name_language_combo_box = QComboBox()
             self.name_language_combo_box.addItems(['한글', '영어'])
@@ -792,6 +871,7 @@ class MainWindow(QMainWindow):
             delay_layout.addWidget(repeat_label)
             delay_layout.addWidget(self.repeat_input)
             delay_layout.addWidget(self.convert_checkbox)
+            delay_layout.addWidget(self.use_proxy_checkbox)
 
             self.load_from_file_button = QPushButton('파일에서 불러오기')
             self.load_from_file_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
@@ -962,7 +1042,7 @@ class MainWindow(QMainWindow):
         self.progress_bar.setMaximum(len(entries))
         self.worker = Worker(entries, int(self.writing_delay_input.text()), int(self.overall_delay_input.text()),
                              int(self.repeat_input.text()), self.convert_checkbox.isChecked(), self.getFileList(),
-                             self.name_language_combo_box.currentText())
+                             self.name_language_combo_box.currentText(), self.use_proxy_checkbox.isChecked())
         self.worker.progress_updated.connect(self.update_progress)
         self.worker.log_updated.connect(self.add_log)
         self.worker.api_count_updated.connect(self.update_api_count)
