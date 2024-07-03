@@ -51,6 +51,31 @@ jongsung = [''] + ['ㄱ', 'ㄲ', 'ㄳ', 'ㄴ', 'ㄵ', 'ㄶ', 'ㄷ', 'ㄹ', 'ㄺ'
 
 PROXY_USE = True
 
+# 프록시 IP 리스트
+PROXY_LIST = [
+    "104.164.157.163:20000",
+    "168.151.163.217:20000",
+    "168.151.182.63:20000",
+    "168.151.194.152:20000",
+    "168.151.251.32:20000",
+    "174.140.239.122:20000",
+    "184.174.69.109:20000",
+    "186.179.41.38:20000",
+    "188.42.10.151:20000",
+    "188.42.10.162:20000",
+    "188.42.16.194:20000",
+    "188.42.16.213:20000",
+    "188.42.18.62:20000",
+    "188.42.18.85:20000",
+    "188.42.4.138:20000",
+    "188.42.4.46:20000",
+    "190.123.217.120:20000",
+    "190.123.217.238:20000",
+    "190.123.217.92:20000",
+    "66.78.52.186:20000"
+]
+
+
 def create_proxy_extension(proxy_host, proxy_port, proxy_user, proxy_pass):
     # manifest.json 내용
     manifest_json = """
@@ -474,13 +499,21 @@ class Worker(QThread):
                 f"user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36 Edg/91.0.864.59")
 
             if self.use_proxy:
-                self.log_updated.emit('프록시 적용 중')
-                proxy_host = 'gate.dc.smartproxy.com'
-                proxy_port = '20000'
-                proxy_user = 'sp5xuq4gr3'
+
+                proxy_user = 'dandydbs'
                 proxy_pass = '+Dlagoon0304'
+                # 랜덤으로 프록시 IP 선택
+                proxy = random.choice(PROXY_LIST)
+                proxy_host, proxy_port = proxy.split(":")[0], proxy.split(":")[1]
+                self.log_updated.emit(f'[프록시 적용 중] [{proxy_host}]')
                 proxy_extension = create_proxy_extension(proxy_host, proxy_port, proxy_user, proxy_pass)
                 options.add_extension(proxy_extension)
+                # proxy_host = 'gate.dc.smartproxy.com'
+                # proxy_port = '20000'
+                # proxy_user = 'sp5xuq4gr3'
+                # proxy_pass = '+Dlagoon0304'
+                # proxy_extension = create_proxy_extension(proxy_host, proxy_port, proxy_user, proxy_pass)
+                # options.add_extension(proxy_extension)
 
             self.driver = webdriver.Chrome(service=Service(chrome_driver_path), options=options)
             self.driver.implicitly_wait(3)
@@ -838,15 +871,21 @@ class Worker(QThread):
             self.write_contents(url, login_need)
 
     def run(self):
-        self.init_web_driver()
-        self.open_tabs()
-        tab_handles = self.driver.window_handles
+        if not self.use_proxy:
+            self.init_web_driver()
+            self.open_tabs()
+            tab_handles = self.driver.window_handles
 
         for k in range(self.repeat):
             self.log_updated.emit(f'{k + 1}번째 반복 실행')
             for i, entry in enumerate(self.entries):
                 try:
                     url, user_id, password = entry
+                    if self.use_proxy:
+                        self.init_web_driver()
+                        self.open_tabs()
+                        tab_handles = self.driver.window_handles
+
                     for j in range(self.num_tabs):
                         self.driver.switch_to.window(tab_handles[j])
                         self.perform_task(k, i, url, user_id, password)
