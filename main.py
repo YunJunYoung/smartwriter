@@ -7,6 +7,8 @@ import urllib.parse
 import clipboard
 import zipfile
 import itertools
+import tempfile
+import shutil
 
 from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QLineEdit, QMenuBar, \
     QAction, QMessageBox, QMainWindow, QMenu, QProgressBar, QTextEdit, QActionGroup, QSizePolicy, QGroupBox, \
@@ -49,6 +51,35 @@ jungsung = ['ㅏ', 'ㅐ', 'ㅑ', 'ㅒ', 'ㅓ', 'ㅔ', 'ㅕ', 'ㅖ', 'ㅗ', 'ㅘ'
 jongsung = [''] + ['ㄱ', 'ㄲ', 'ㄳ', 'ㄴ', 'ㄵ', 'ㄶ', 'ㄷ', 'ㄹ', 'ㄺ', 'ㄻ', 'ㄼ', 'ㄽ', 'ㄾ', 'ㄿ', 'ㅀ', 'ㅁ', 'ㅂ', 'ㅄ', 'ㅅ', 'ㅆ',
                    'ㅇ', 'ㅈ', 'ㅊ', 'ㅋ', 'ㅌ', 'ㅍ', 'ㅎ']
 
+
+nord_vpn_id = 'fjoaledfpmneenckfbpdfhkmimnjocfa'
+
+def get_temp_profile():
+    return tempfile.mkdtemp()
+
+def get_chrome_user_data_dir():
+    user_name = os.getlogin()
+    user_data_dir = rf'C:\Users\{user_name}\AppData\Local\Google\Chrome\User Data'
+    return user_data_dir
+
+def copy_profile_data(src_profile, dest_profile):
+    def ignore_errors(src, names):
+        ignored = []
+        for name in names:
+            srcname = os.path.join(src, name)
+            try:
+                if os.path.isdir(srcname):
+                    os.listdir(srcname)
+                else:
+                    open(srcname, 'rb')
+            except (PermissionError, FileNotFoundError) as e:
+                ignored.append(name)
+        return set(ignored)
+
+    try:
+        shutil.copytree(src_profile, dest_profile, dirs_exist_ok=True, ignore=ignore_errors)
+    except Exception as e:
+        print(f"Error copying profile data: {e}")
 
 PROXY_USE = True
 
@@ -466,7 +497,7 @@ class Worker(QThread):
     api_count_updated = pyqtSignal(int)
 
     def __init__(self, entries, writing_delay, overall_delay, repeat, convert, excel_file_list, name_language,
-                 use_proxy, num_tabs=5):
+                 use_proxy, num_tabs=5, use_secret=False):
         super().__init__()
         try:
             self.entries = entries
@@ -484,10 +515,9 @@ class Worker(QThread):
             self.num_tabs = num_tabs
             self.total_number = len(self.entries) * repeat * num_tabs
             random_titles_contents = self.picker.get_random_titles_contents(self.total_number)
-            print(f'random_titles_contents : {random_titles_contents}')
             self.titles, self.contents, self.img_urls = zip(*random_titles_contents)
-            print(f'self.titles : {self.titles}, self.contents : {self.contents}, self.img_urls : {self.img_urls}')
             self.write_index = 0
+            self.use_secret = use_secret
         except Exception as e:
             print_with_debug(e)
 
@@ -498,9 +528,14 @@ class Worker(QThread):
             options.add_argument("--start-maximized")
             options.add_argument(
                 f"user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36 Edg/91.0.864.59")
+            if self.use_secret:
+                options.add_argument("--incognito")
+                existing_profile_path = get_chrome_user_data_dir()
+                temp_profile = get_temp_profile()
+                copy_profile_data(existing_profile_path, temp_profile)
+                options.add_argument(f'user-data-dir={temp_profile}')
 
             if self.use_proxy:
-
                 # 랜덤으로 프록시 IP 선택
                 proxy = get_proxy_ip()
                 proxy_host, proxy_port = proxy.split(":")[0], proxy.split(":")[1]
@@ -994,6 +1029,7 @@ class MainWindow(QMainWindow):
             self.tab_input = QLineEdit()
             self.convert_checkbox = QCheckBox('특수문자 치환')
             self.use_proxy_checkbox = QCheckBox('프록시 사용')
+            self.use_secret_checkbox = QCheckBox('시크릿 모드')
             name_language_label = QLabel('이름 언어')
             self.name_language_combo_box = QComboBox()
             self.name_language_combo_box.addItems(['한글', '영어'])
@@ -1018,6 +1054,7 @@ class MainWindow(QMainWindow):
             delay_layout.addWidget(self.tab_input)
             delay_layout.addWidget(self.convert_checkbox)
             delay_layout.addWidget(self.use_proxy_checkbox)
+            delay_layout.addWidget(self.use_secret_checkbox)
 
             self.load_from_file_button = QPushButton('파일에서 불러오기')
             self.load_from_file_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
@@ -1190,7 +1227,7 @@ class MainWindow(QMainWindow):
         self.progress_bar.setMaximum(len(entries))
         self.worker = Worker(entries, int(self.writing_delay_input.text()), int(self.overall_delay_input.text()),
                              int(self.repeat_input.text()), self.convert_checkbox.isChecked(), self.getFileList(),
-                             self.name_language_combo_box.currentText(), self.use_proxy_checkbox.isChecked(), int(self.tab_input.text()))
+                             self.name_language_combo_box.currentText(), self.use_proxy_checkbox.isChecked(), int(self.tab_input.text()), self.use_secret_checkbox.isChecked() )
         self.worker.progress_updated.connect(self.update_progress)
         self.worker.log_updated.connect(self.add_log)
         self.worker.api_count_updated.connect(self.update_api_count)
