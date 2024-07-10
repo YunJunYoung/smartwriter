@@ -51,8 +51,26 @@ jungsung = ['ㅏ', 'ㅐ', 'ㅑ', 'ㅒ', 'ㅓ', 'ㅔ', 'ㅕ', 'ㅖ', 'ㅗ', 'ㅘ'
 jongsung = [''] + ['ㄱ', 'ㄲ', 'ㄳ', 'ㄴ', 'ㄵ', 'ㄶ', 'ㄷ', 'ㄹ', 'ㄺ', 'ㄻ', 'ㄼ', 'ㄽ', 'ㄾ', 'ㄿ', 'ㅀ', 'ㅁ', 'ㅂ', 'ㅄ', 'ㅅ', 'ㅆ',
                    'ㅇ', 'ㅈ', 'ㅊ', 'ㅋ', 'ㅌ', 'ㅍ', 'ㅎ']
 
+def log_error(url, error_message):
+    error_data = {
+        'url': url,
+        '에러원인': error_message,
+        '시간': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    }
+    with open('error_log.json', 'a', encoding='utf-8') as f:
+        json.dump(error_data, f, ensure_ascii=False)
+        f.write('\n')
 
-nord_vpn_id = 'fjoaledfpmneenckfbpdfhkmimnjocfa'
+
+def check_url_status(url):
+    try:
+        response = requests.get(url)
+        if response.status_code == 200:
+            return True, response.status_code
+        else:
+            return False, response.status_code
+    except requests.exceptions.RequestException as e:
+        return False, str(e)
 
 def get_temp_profile():
     return tempfile.mkdtemp()
@@ -82,6 +100,8 @@ def copy_profile_data(src_profile, dest_profile):
         print(f"Error copying profile data: {e}")
 
 PROXY_USE = True
+
+error_url_list = []
 
 def read_proxy_list(file_path):
     with open(file_path, 'r') as file:
@@ -632,9 +652,29 @@ class Worker(QThread):
     def perform_task(self, repeat, index, url, user_id, password):
         if self.starts_with_imweb(url):
             url = self.remove_url_prefix(url)
+
+            if url in error_url_list:
+                self.log_updated.emit(f'[{url}] 문제 있는 url로 SKIP')
+                return
+
             self.driver.get(url)
             self.log_updated.emit(f'[Index:{repeat + 1}_{index + 1}] [{url}] 글쓰기 페이지 이동')
             time.sleep(0.1)
+
+            submit_button = None
+            try:
+                # Submit 버튼이 있는지 먼저 확인
+                submit_button = WebDriverWait(self.driver, 10).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, 'button._save_post.save_post.btn'))
+                )
+            except Exception as e:
+                submit_button = None
+
+            if submit_button is None:
+                self.log_updated.emit(f'[ERROR][{url}] 현재 url 비정상 판단으로 list에서 제외')
+                log_error(url, f"정상적인 글쓰기 불가능(404 에러 포함)")
+                error_url_list.append(url)
+                return
 
             for _ in range(4):
                 webdriver.ActionChains(self.driver).send_keys(Keys.TAB).perform()
@@ -1006,6 +1046,7 @@ class MainWindow(QMainWindow):
         self.table = QTableWidget()
         self.progress_bar = QProgressBar(self)
         self.log_edit_box = QTextEdit(self)
+        self.error_log_edit_box = QTextEdit(self)
         self.count_label = None
         self.url_manager = None
         self.worker = None
@@ -1128,7 +1169,10 @@ class MainWindow(QMainWindow):
 
             self.log_edit_box.setReadOnly(True)  # 읽기 전용으로 설정
             self.log_edit_box.setFixedHeight(150)  # 높이 설정
+            self.error_log_edit_box.setReadOnly(True)  # 읽기 전용으로 설정
+            self.error_log_edit_box.setFixedHeight(100)  # 높이 설정
             main_layout.addWidget(self.log_edit_box)
+            main_layout.addWidget(self.error_log_edit_box)
 
             container = QWidget()
             container.setLayout(main_layout)
@@ -1169,12 +1213,17 @@ class MainWindow(QMainWindow):
             print_with_debug(e)
 
     def add_log(self, log):
+        if log.startswith('[ERROR]'):
+            log_box = self.error_log_edit_box
+        else:
+            log_box = self.log_edit_box
+
         current_time = datetime.datetime.now()
         formatted_time = current_time.strftime("[%Y-%m-%d %H:%M:%S]")
         formatted_log = f"{formatted_time} {log}"
         print(formatted_log)
-        self.log_edit_box.append(formatted_log)
-        self.log_edit_box.verticalScrollBar().setValue(self.log_edit_box.verticalScrollBar().maximum())
+        log_box.append(formatted_log)
+        log_box.verticalScrollBar().setValue(log_box.verticalScrollBar().maximum())
 
     def addFilePaths(self, filePaths):
         try:
