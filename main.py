@@ -206,6 +206,45 @@ def generate_korean_name():
     return name
 
 
+def generate_random_number(length):
+    # 랜덤한 숫자를 생성하고 그 숫자의 길이를 조정합니다.
+    number = random.randint(10 ** (length - 1), 10 ** length - 1)
+    return number
+
+
+def generate_random_chinese_characters(length):
+    if length < 4:
+        length = 4
+    elif length > 6:
+        length = 6
+
+    # 중국어 글자의 유니코드 범위 설정 (기본 범위 CJK Unified Ideographs)
+    start, end = 0x4E00, 0x9FFF
+
+    # 랜덤한 중국어 글자 생성
+    chinese_characters = ''.join(chr(random.randint(start, end)) for _ in range(length))
+    return chinese_characters
+
+
+def generate_random_japanese_characters(length):
+    if length < 4:
+        length = 4
+    elif length > 6:
+        length = 6
+
+    # 히라가나와 가타카나의 유니코드 범위 설정
+    hiragana_start, hiragana_end = 0x3040, 0x309F
+    katakana_start, katakana_end = 0x30A0, 0x30FF
+
+    # 랜덤한 일본어 글자 생성
+    japanese_characters = ''.join(chr(random.choice(
+        list(range(hiragana_start, hiragana_end + 1)) +
+        list(range(katakana_start, katakana_end + 1))
+    )) for _ in range(length))
+
+    return japanese_characters
+
+
 def generate_english_name():
     consonants = "bcdfghjklmnpqrstvwxyz"
     vowels = "aeiou"
@@ -350,68 +389,6 @@ def get_login_url(write_url):
         return None
 
 
-def read_excel_data(file_path):
-    # 엑셀 파일을 읽어 DataFrame으로 변환
-    df = pd.read_excel(file_path)
-
-    # 첫 번째 행은 데이터가 아니므로 건너뜀
-    data = df.iloc[1:]
-
-    titles = data['제목'].tolist()  # 제목 열을 리스트로 변환
-    contents = data['내용'].tolist()  # 내용 열을 리스트로 변환
-    img_urls = data['이미지URL'].tolist()  # 이미지URL 열을 리스트로 변환
-
-    return titles, contents, img_urls
-
-
-def get_random_title_content(file_path):
-    titles, contents, img_urls = read_excel_data(file_path)
-
-    if len(titles) != len(contents):
-        raise ValueError("Titles and contents lists must be of the same length")
-
-    random_index = random.randint(0, len(titles) - 1)
-
-    title = titles[random_index]
-    content = contents[random_index]
-    img_url = img_urls[random_index]
-
-    # img_url이 nan인지 확인하여 None으로 변경
-    if pd.isna(img_url):
-        img_url = None
-
-    return title, content, img_url
-
-
-def get_random_titles_contents(file_path, N):
-    titles, contents, img_urls = read_excel_data(file_path)
-
-    if len(titles) != len(contents) or len(titles) != len(img_urls):
-        raise ValueError("Titles, contents, and img_urls lists must be of the same length")
-
-    if N > len(titles):
-        raise ValueError("N must be less than or equal to the number of available rows")
-
-    random_indices = random.sample(range(len(titles)), N)
-
-    random_titles_contents = []
-    for index in random_indices:
-        title = titles[index]
-        content = contents[index]
-        img_url = img_urls[index]
-
-        # img_url이 nan인지 확인하여 None으로 변경
-        if pd.isna(img_url):
-            img_url = None
-
-        random_titles_contents.append((title, content, img_url))
-
-    return random_titles_contents
-
-
-# 엑셀 파일 경로
-excel_file_path = "ad.xlsx"
-
 
 # Example usage
 def replace_spaces_with_decoded_unicode(text: str, unicode_file: str) -> str:
@@ -471,7 +448,7 @@ class ExcelRandomPicker:
             # 첫 번째 행을 건너뛰지 않고 파일을 읽음
             df = pd.read_excel(file)
             # 열 이름을 수동으로 설정
-            df.columns = ['No', '제목', '내용', '이미지URL']
+            df.columns = ['No', '제목', '내용', '이미지URL', '사이트URL']
             data_frames.append(df)
         return data_frames
 
@@ -492,6 +469,7 @@ class ExcelRandomPicker:
                 title = row.get('제목')
                 content = row.get('내용')
                 img_url = row.get('이미지URL')
+                site_url = row.get('사이트URL')
 
                 if pd.isna(title) or pd.isna(content):
                     continue
@@ -500,7 +478,10 @@ class ExcelRandomPicker:
                 if pd.isna(img_url):
                     img_url = None
 
-                all_random_titles_contents.append((title, content, img_url))
+                if pd.isna(site_url):
+                    site_url = None
+
+                all_random_titles_contents.append((title, content, img_url, site_url))
 
                 # 디버깅: 현재 리스트 길이 출력
 
@@ -535,7 +516,7 @@ class Worker(QThread):
             self.num_tabs = num_tabs
             self.total_number = len(self.entries) * repeat * num_tabs
             random_titles_contents = self.picker.get_random_titles_contents(self.total_number)
-            self.titles, self.contents, self.img_urls = zip(*random_titles_contents)
+            self.titles, self.contents, self.img_urls, self.site_urls = zip(*random_titles_contents)
             self.write_index = 0
             self.use_secret = use_secret
         except Exception as e:
@@ -657,24 +638,31 @@ class Worker(QThread):
                 self.log_updated.emit(f'[{url}] 문제 있는 url로 SKIP')
                 return
 
-            self.driver.get(url)
-            self.log_updated.emit(f'[Index:{repeat + 1}_{index + 1}] [{url}] 글쓰기 페이지 이동')
-            time.sleep(0.1)
-
             submit_button = None
-            try:
-                # Submit 버튼이 있는지 먼저 확인
-                submit_button = WebDriverWait(self.driver, 10).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, 'button._save_post.save_post.btn'))
-                )
-            except Exception as e:
-                submit_button = None
+            retry_attempts = 3  # 재시도 횟수
 
-            if submit_button is None:
-                self.log_updated.emit(f'[ERROR][{url}] 현재 url 비정상 판단으로 list에서 제외')
-                log_error(url, f"정상적인 글쓰기 불가능(404 에러 포함)")
-                error_url_list.append(url)
-                return
+            for attempt in range(retry_attempts):
+                try:
+                    self.driver.get(url)
+                    self.log_updated.emit(f'[Index:{repeat + 1}_{index + 1}] [{url}] 글쓰기 페이지 이동')
+                    time.sleep(0.1)
+                    # Submit 버튼이 있는지 먼저 확인
+                    submit_button = WebDriverWait(self.driver, 10).until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, 'button._save_post.save_post.btn'))
+                    )
+
+                    if submit_button is not None:
+                        break  # 정상적으로 버튼이 로드되었으면 루프 탈출
+                except Exception as e:
+                    submit_button = None
+                    if attempt < retry_attempts - 1:
+                        self.log_updated.emit(f'[ERROR][{url}] {attempt+1}번째 접속 에러 발생. 누적{retry_attempts}번째 접속 에러 발생 시 최종 에러 처리.')
+                        time.sleep(3)  # 재시도 전 대기 시간
+                    else:
+                        self.log_updated.emit(f'[ERROR][{url}] 현재 url 비정상 판단으로 list에서 제외')
+                        log_error(url, f"정상적인 글쓰기 불가능(404 에러 포함)")
+                        error_url_list.append(url)
+                        return
 
             for _ in range(4):
                 webdriver.ActionChains(self.driver).send_keys(Keys.TAB).perform()
@@ -690,8 +678,18 @@ class Worker(QThread):
                 self.driver.execute_script("arguments[0].scrollIntoView();", name_input_element)
                 if self.name_language == '한글':
                     name = generate_korean_name()
-                else:
+                elif self.name_language == '영어':
                     name = generate_english_name()
+                elif self.name_language == '한글+숫자':
+                    name = f'{generate_korean_name()}{generate_random_number(4)}'
+                elif self.name_language == '영어+숫자':
+                    name = f'{generate_english_name()}{generate_random_number(3)}'
+                elif self.name_language == '숫자만':
+                    name = generate_random_number(6)
+                elif self.name_language == '중국어':
+                    name = generate_random_chinese_characters(4)
+                elif self.name_language == '일본어':
+                    name = generate_random_japanese_characters(6)
 
                 # JavaScript를 사용하여 값을 설정
                 self._set_value_with_javascript(self.driver, name_input_element, name)
@@ -712,14 +710,14 @@ class Worker(QThread):
 
             try:
                 # 드롭다운 메뉴를 여는 요소를 클릭
-                category_select = WebDriverWait(self.driver, 10).until(
+                category_select = WebDriverWait(self.driver, 1).until(
                     EC.element_to_be_clickable((By.CSS_SELECTOR,
                                                 '.schedule_name .icon-select._category_type_list .div_select.category_select'))
                 )
                 category_select.click()
 
                 # 드롭다운 메뉴의 항목들이 로드될 때까지 대기
-                WebDriverWait(self.driver, 10).until(
+                WebDriverWait(self.driver, 1).until(
                     EC.presence_of_all_elements_located(
                         (By.CSS_SELECTOR, '.category_dropdown._select_option .tse-scroll-content ul li'))
                 )
@@ -757,6 +755,8 @@ class Worker(QThread):
             title = self.titles[self.write_index]
             content = self.contents[self.write_index]
             img_url = self.img_urls[self.write_index]
+            site_url = self.site_urls[self.write_index]
+
             self.write_index += 1
 
             try:
@@ -786,7 +786,10 @@ class Worker(QThread):
                     content = text_to_html(text_content)
 
                 if img_url:
-                    edit_content = f"<img src=\"{img_url}\"><p>{content}</p>"
+                    if site_url:
+                        edit_content = f"<a href=\"{site_url}\" target=\"_blank\"><img src=\"{img_url}\"><p>{content}</p></a>"
+                    else:
+                        edit_content = f"<img src=\"{img_url}\"><p>{content}</p>"
                 else:
                     edit_content = f"<p>{content}</p>"
                 print(f'edit_content : {edit_content}')
@@ -867,8 +870,18 @@ class Worker(QThread):
 
                     if self.name_language == '한글':
                         name = generate_korean_name()
-                    else:
+                    elif self.name_language == '영어':
                         name = generate_english_name()
+                    elif self.name_language == '한글+숫자':
+                        name = f'{generate_korean_name()}{generate_random_number(4)}'
+                    elif self.name_language == '영어+숫자':
+                        name = f'{generate_english_name()}{generate_random_number(3)}'
+                    elif self.name_language == '숫자만':
+                        name = generate_random_number(6)
+                    elif self.name_language == '중국어':
+                        name = generate_random_chinese_characters(4)
+                    elif self.name_language == '일본어':
+                        name = generate_random_japanese_characters(6)
                     name_box.send_keys(name)
                 except Exception as e:
                     self.log_updated.emit(f'[{url}] 이름 입력 요소를 찾을 수 없습니다.')
@@ -906,6 +919,7 @@ class Worker(QThread):
             title = self.titles[self.write_index]
             content = self.contents[self.write_index]
             img_url = self.img_urls[self.write_index]
+
             self.write_index += 1
 
             if self.convert:
@@ -1073,7 +1087,7 @@ class MainWindow(QMainWindow):
             self.use_secret_checkbox = QCheckBox('시크릿 모드')
             name_language_label = QLabel('이름 언어')
             self.name_language_combo_box = QComboBox()
-            self.name_language_combo_box.addItems(['한글', '영어'])
+            self.name_language_combo_box.addItems(['한글', '영어', '한글+숫자', '영어+숫자', '숫자만', '중국어', '일본어'])
 
             # Set the size policy for the new input boxes
             self.writing_delay_input.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
