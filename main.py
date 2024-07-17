@@ -211,6 +211,15 @@ def generate_random_number(length):
     number = random.randint(10 ** (length - 1), 10 ** length - 1)
     return number
 
+custom_file_name = 'custom_writer.txt'
+def generate_random_writer():
+    with open(custom_file_name, 'r', encoding='utf-8') as file:
+        words = file.read().splitlines()  # 파일을 줄 단위로 읽어와서 리스트로 변환
+
+    if words:
+        return random.choice(words)  # 리스트에서 랜덤으로 한 단어 선택
+    else:
+        return None  # 파일이 비어있을 경우 None 반환
 
 def generate_random_chinese_characters(length):
     if length < 4:
@@ -437,6 +446,25 @@ def find_login_url(write_url):
     return None
 
 
+def generate_random_user_agent():
+    os_platforms = ["Windows NT 10.0", "Windows NT 6.1", "Macintosh; Intel Mac OS X 10_15_7", "X11; Linux x86_64"]
+    browsers = [
+        "Mozilla/5.0 ({os}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{chrome_version} Safari/537.36",
+        "Mozilla/5.0 ({os}) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/{safari_version} Safari/605.1.15",
+        "Mozilla/5.0 ({os}; rv:{firefox_version}) Gecko/20100101 Firefox/{firefox_version}"
+    ]
+
+    os_platform = random.choice(os_platforms)
+    chrome_version = f"{random.randint(70, 91)}.0.{random.randint(3000, 4500)}.{random.randint(100, 200)}"
+    safari_version = f"{random.randint(14, 15)}.0.{random.randint(1, 3)}"
+    firefox_version = f"{random.randint(78, 90)}.0"
+
+    browser = random.choice(browsers)
+    user_agent = browser.format(os=os_platform, chrome_version=chrome_version, safari_version=safari_version,
+                                firefox_version=firefox_version)
+
+    return user_agent
+
 class ExcelRandomPicker:
     def __init__(self, excel_file_list):
         self.excel_file_list = excel_file_list
@@ -527,8 +555,8 @@ class Worker(QThread):
             chrome_driver_path = ChromeDriverManager().install()
             options = webdriver.ChromeOptions()
             options.add_argument("--start-maximized")
-            options.add_argument(
-                f"user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36 Edg/91.0.864.59")
+            user_agent = generate_random_user_agent()
+            options.add_argument(f"user-agent={user_agent}")
             if self.use_secret:
                 options.add_argument("--incognito")
                 existing_profile_path = get_chrome_user_data_dir()
@@ -647,7 +675,7 @@ class Worker(QThread):
                     self.log_updated.emit(f'[Index:{repeat + 1}_{index + 1}] [{url}] 글쓰기 페이지 이동')
                     time.sleep(0.1)
                     # Submit 버튼이 있는지 먼저 확인
-                    submit_button = WebDriverWait(self.driver, 10).until(
+                    submit_button = WebDriverWait(self.driver, 20).until(
                         EC.presence_of_element_located((By.CSS_SELECTOR, 'button._save_post.save_post.btn'))
                     )
 
@@ -656,13 +684,13 @@ class Worker(QThread):
                 except Exception as e:
                     submit_button = None
                     if attempt < retry_attempts - 1:
-                        self.log_updated.emit(f'[ERROR][{url}] {attempt+1}번째 접속 에러 발생. 누적{retry_attempts}번째 접속 에러 발생 시 최종 에러 처리.')
-                        time.sleep(3)  # 재시도 전 대기 시간
+                        self.log_updated.emit(f'[ERROR][{url}] {attempt+1}번째 접속 에러 발생. 누적{retry_attempts}번째 접속 에러 발생 시 SKIP 처리. 10초 대기 후 재시도')
+                        time.sleep(10)  # 재시도 전 대기 시간
                     else:
-                        self.log_updated.emit(f'[ERROR][{url}] 현재 url 비정상 판단으로 list에서 제외')
+                        self.log_updated.emit(f'[ERROR][{url}] 현재 url 비정상 판단으로 글쓰기 불가. 추후 확인 필요.')
                         log_error(url, f"정상적인 글쓰기 불가능(404 에러 포함)")
-                        error_url_list.append(url)
-                        return
+                        return False
+                        #error_url_list.append(url)
 
             for _ in range(4):
                 webdriver.ActionChains(self.driver).send_keys(Keys.TAB).perform()
@@ -690,6 +718,8 @@ class Worker(QThread):
                     name = generate_random_chinese_characters(4)
                 elif self.name_language == '일본어':
                     name = generate_random_japanese_characters(6)
+                elif self.name_language == '커스텀':
+                    name = generate_random_writer()
 
                 # JavaScript를 사용하여 값을 설정
                 self._set_value_with_javascript(self.driver, name_input_element, name)
@@ -958,6 +988,8 @@ class Worker(QThread):
 
             self.write_contents(url, login_need)
 
+        return True
+
     def run(self):
         if not self.use_proxy:
             self.init_web_driver()
@@ -976,7 +1008,9 @@ class Worker(QThread):
 
                     for j in range(self.num_tabs):
                         self.driver.switch_to.window(tab_handles[j])
-                        self.perform_task(k, i, url, user_id, password)
+                        perform_result = self.perform_task(k, i, url, user_id, password)
+                        if not perform_result:
+                            break
 
                     self.log_updated.emit(f'[Index:{k + 1}_{i + 1}] [{url}] 글쓰기 완료')
                     self.progress_updated.emit(i + 1)
@@ -1087,7 +1121,7 @@ class MainWindow(QMainWindow):
             self.use_secret_checkbox = QCheckBox('시크릿 모드')
             name_language_label = QLabel('이름 언어')
             self.name_language_combo_box = QComboBox()
-            self.name_language_combo_box.addItems(['한글', '영어', '한글+숫자', '영어+숫자', '숫자만', '중국어', '일본어'])
+            self.name_language_combo_box.addItems(['한글', '영어', '한글+숫자', '영어+숫자', '숫자만', '중국어', '일본어', '커스텀'])
 
             # Set the size policy for the new input boxes
             self.writing_delay_input.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
