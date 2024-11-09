@@ -109,27 +109,6 @@ def get_board_value(url):
     else:
         return None
 
-
-def check_ip_without_proxy():
-    try:
-        response = requests.get(ip_check_url)
-        ip = response.json()["origin"]
-        print(f"Without Proxy IP (Alternative): {ip}")
-    except Exception as e:
-        print(f"Error without proxy: {e}")
-
-# 프록시 적용 후 IP 확인
-def check_ip_with_proxy(proxies):
-    try:
-        response = requests.get(ip_check_url, proxies=proxies)
-        ip = response.json()["origin"]
-        print(f"With Proxy IP: {ip}")
-    except Exception as e:
-        print(f"Error with proxy: {e}")
-
-def utc_to_kst(utc_time):
-    return utc_time + datetime.timedelta(hours=9)
-
 def download_and_extract_zip(url, extract_to):
     headers = {
         'Authorization': f'token {GITHUB_TOKEN}',
@@ -348,26 +327,6 @@ def text_to_html(text):
         print_with_debug(e)
 
 
-def generate_korean_phone_number():
-    # 010-으로 시작
-    phone_number = "010-"
-
-    # 중간 4자리 숫자 생성
-    middle_four_digits = ''.join([str(random.randint(0, 9)) for _ in range(4)])
-
-    # 마지막 4자리 숫자 생성
-    last_four_digits = ''.join([str(random.randint(0, 9)) for _ in range(4)])
-
-    # 전체 전화번호 조합
-    phone_number += f"{middle_four_digits}-{last_four_digits}"
-
-    return phone_number
-
-
-api_key = '37f1af7f0d286cd9ad65892446c64ab7'
-solver = TwoCaptcha(api_key, defaultTimeout=30, pollingInterval=5)
-
-
 def print_with_debug(msg):
     print(msg)
     traceback.print_exc()
@@ -380,14 +339,6 @@ def get_center_position(width, height):
     y = int((screen_geometry.height() - height) / 2 + screen_geometry.top())
     return x, y
 
-
-def read_data_from_file(filename):
-    try:
-        with open(filename, 'r') as file:
-            data = json.load(file)
-            return data.get('title', ''), data.get('content', '')
-    except (FileNotFoundError, json.JSONDecodeError):
-        return '', ''
 
 class ExcelRandomPicker:
     def __init__(self, excel_file_list):
@@ -474,18 +425,6 @@ class Worker(QThread):
             self.session = None
         except Exception as e:
             print_with_debug(e)
-
-    def _set_value_with_javascript(self, element, text):
-        try:
-            # JavaScript를 사용하여 값을 설정하고 입력 이벤트를 트리거합니다.
-            self.driver.execute_script("""
-            arguments[0].value = arguments[1];
-            arguments[0].dispatchEvent(new Event('input', { bubbles: true }));
-            arguments[0].dispatchEvent(new Event('change', { bubbles: true }));
-            """, element, text)
-
-        except Exception as e:
-            print(f"Error: {e}")
 
     def get_name(self, name_language):
         if name_language == '한글':
@@ -788,13 +727,6 @@ class Worker(QThread):
             self.log_updated.emit(f'[Index:{repeat + 1}_{index + 1}_{sub_index + 1}] [STEP] [3] 에러발생 : {e}')
             return False
 
-    def switch_to_tab(self, index):
-        if 0 <= index < len(self.driver.window_handles):
-            self.driver.switch_to.window(self.driver.window_handles[index])
-            time.sleep(1)
-        else:
-            print(f"인덱스 {index}는 유효하지 않습니다.")
-
     def init_driver(self):
         try:
             self.log_updated.emit('크롬 초기화 시작')
@@ -959,12 +891,10 @@ class MainWindow(QMainWindow):
             main_layout.addLayout(delay_layout)
 
             button_layout = QHBoxLayout()
-            # button_layout.addWidget(self.login_manage_button)
             button_layout.addWidget(self.write_button)
 
             main_layout.addLayout(button_layout)
 
-            self.login_manage_button.clicked.connect(self.on_login_manage_button_click)
             self.write_button.clicked.connect(self.on_write_button_click)
 
             load_excel_button = QPushButton('엑셀 불러오기')
@@ -1169,13 +1099,6 @@ class MainWindow(QMainWindow):
             self.listBox.clear()
             if files:
                 self.addFilePaths(files)
-        except Exception as e:
-            print_with_debug(e)
-
-    def on_login_manage_button_click(self):
-        try:
-            self.url_manager = URLManager()
-            self.url_manager.show()
         except Exception as e:
             print_with_debug(e)
 
@@ -1453,12 +1376,6 @@ class URLManager(QWidget):
             with open('login_urls.json', 'w') as f:
                 json.dump([], f)
 
-
-def convert_cookies(cookies):
-    requests_cookies = {}
-    for cookie in cookies:
-        requests_cookies[cookie['name']] = cookie['value']
-    return requests_cookies
 
 
 if __name__ == "__main__":
