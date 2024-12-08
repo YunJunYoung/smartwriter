@@ -13,6 +13,9 @@ import threading
 import numpy as np
 import capsolver
 import httpx
+import subprocess
+import psutil
+
 
 from fake_useragent import UserAgent
 from urllib.parse import urlparse, parse_qs
@@ -42,7 +45,8 @@ from PyQt5 import QtWidgets as qtw
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from selenium.common.exceptions import TimeoutException
 
-from selenium import webdriver
+#from selenium import webdriver
+from seleniumwire import webdriver  # Selenium Wire 사용
 from selenium.webdriver.common.by import By
 from selenium.common.exceptions import UnexpectedAlertPresentException
 from selenium.common.exceptions import NoSuchElementException
@@ -76,6 +80,15 @@ ip_check_url = "https://httpbin.org/ip"
 
 # 접속 테스트할 일반 웹사이트 URL
 test_site = "https://www.google.com"
+
+chrome_config_path = "chrome_config.json"
+with open(chrome_config_path, "r") as file:
+    config = json.load(file)
+
+# 크롬 실행 경로 가져오기
+chrome_path = config.get("chrome_path")
+if not chrome_path:
+    raise FileNotFoundError("Chrome 실행 경로가 JSON 파일에 지정되지 않았습니다.")
 
 def get_base_domain(url):
     parsed_url = urlparse(url)
@@ -423,6 +436,7 @@ class Worker(QThread):
             self.temp_profiles = []
             self.driver = None
             self.session = None
+            self.use_chrome = use_chrome
         except Exception as e:
             print_with_debug(e)
 
@@ -474,7 +488,10 @@ class Worker(QThread):
             else:
                 edit_content = f"<p>{content}</p>"
 
-            ret = self.write_contents(url, name, title, edit_content, repeat, index, sub_index)
+            if self.use_chrome:
+                ret = self.write_contents_for_cloud_flare(url, name, title, edit_content, repeat, index, sub_index)
+            else:
+                ret = self.write_contents(url, name, title, edit_content, repeat, index, sub_index)
             self.write_index += 1
 
             if ret:
@@ -486,6 +503,56 @@ class Worker(QThread):
             print_with_debug(e)
             self.log_updated.emit(f'[Index:{repeat + 1}_{index + 1}_{sub_index+1}] [{url}] 글쓰기 실패')
             return False
+
+    def save_cookies_for_cloud_flare(self, url, repeat, index, sub_index):
+        try:
+            full_base_url = get_full_base_domain(url)
+            # 프록시 설정을 초기화 시점에 설정
+            proxies = None
+            if self.use_proxy:
+                proxy_ip = get_proxy_ip()
+                proxy_host, proxy_port = proxy_ip.split(":")[0], proxy_ip.split(":")[1]
+                proxy = f'http://{PROXY_USERNAME}:{PROXY_PASSWORD}@{proxy_host}:{proxy_port}'
+                proxies = {
+                    'http://': proxy,
+                    'https://': proxy
+                }
+
+            # HTTP/2 지원을 위해 httpx 클라이언트 초기화 시 프록시 설정 포함
+            self.client = httpx.Client(http2=True, proxies=proxies)
+            self.log_updated.emit(f"[Index:{repeat + 1}_{index + 1}_{sub_index + 1}] [STEP] [0] [세션 정보 획득 성공]")
+        except Exception as e:
+            self.log_updated.emit(f"[Index:{repeat + 1}_{index + 1}_{sub_index + 1}] [STEP] [0] 에러발생 : {e}")
+
+    def start_browser_with_subprocess(self, url, user_data_dir, debugging_port=9222):
+        """Subprocess로 Chrome 실행 및 인증"""
+        subprocess.Popen([
+            chrome_path,
+            f"--remote-debugging-port={debugging_port}",
+            f"--user-data-dir={user_data_dir}",
+            url
+        ])
+
+        # 브라우저 인증을 위한 시간 대기
+        time.sleep(1)  # 수동 인증을 완료할 시간
+
+    def connect_to_existing_browser(self, debugging_port=9222):
+        """Selenium으로 인증된 브라우저 세션에 연결"""
+        chrome_options = Options()
+        chrome_options.add_experimental_option("debuggerAddress", f"127.0.0.1:{debugging_port}")
+        self.driver = webdriver.Chrome(options=chrome_options)
+
+    def _set_value_with_javascript(self, driver, element, text):
+        try:
+            # JavaScript를 사용하여 값을 설정하고 입력 이벤트를 트리거합니다.
+            driver.execute_script("""
+            arguments[0].value = arguments[1];
+            arguments[0].dispatchEvent(new Event('input', { bubbles: true }));
+            arguments[0].dispatchEvent(new Event('change', { bubbles: true }));
+            """, element, text)
+            time.sleep(0.1)
+        except Exception as e:
+            print(f"Error: {e}")
 
     def save_cookies(self, url, repeat, index, sub_index):
         try:
@@ -520,35 +587,141 @@ class Worker(QThread):
         except Exception as e:
             self.log_updated.emit(f"[Index:{repeat + 1}_{index + 1}_{sub_index + 1}] [STEP] [0] 에러발생 : {e}")
 
+    def check_post_client_token(self, url, repeat, index, sub_index):
+        try:
+            host = get_base_domain(url)
+            full_base_url = get_full_base_domain(url)
+            post_client_token_url = f'{full_base_url}/set_post_client_token.cm'
+
+            # 브라우저와 일치하도록 설정한 헤더
+            post_client_token_headers = {
+                "accept": "application/json, text/javascript, */*; q=0.01",
+                "accept-encoding": "gzip, deflate, br, zstd",
+                "accept-language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+                "origin": full_base_url,
+                "referer": url,
+                'sec-ch-ua': '"Whale";v="3", "Not-A.Brand";v="8", "Chromium";v="126"',
+                "sec-ch-ua-mobile": "?0",
+                'sec-ch-ua-platform': '"Windows"',
+                "sec-fetch-dest": "empty",
+                "sec-fetch-mode": "cors",
+                "sec-fetch-site": "same-origin",
+                "x-requested-with": "XMLHttpRequest",
+                "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Whale/3.28.266.14 Safari/537.36"
+            }
+
+            # 클라이언트를 통해 HTTP/2 요청 수행
+            response = self.client.post(post_client_token_url, headers=post_client_token_headers, timeout=10)
+
+            # 응답 내용 처리
+            escaped_text = response.text.replace("<", "&lt;").replace(">", "&gt;")
+            if response.status_code == 200:
+                self.log_updated.emit(
+                    f'[Index:{repeat + 1}_{index + 1}_{sub_index + 1}] [STEP] [2] [유효성 검사] [응답 : {response.status_code}] [내용 : {escaped_text}]')
+                return True
+            else:
+                self.log_updated.emit(
+                    f'[Index:{repeat + 1}_{index + 1}_{sub_index + 1}] [STEP] [2] [유효성 검사] [응답 : {response.status_code}] [내용 : {escaped_text}]')
+                return False
+        except Exception as e:
+            self.log_updated.emit(f'[Index:{repeat + 1}_{index + 1}_{sub_index + 1}] [STEP] [2] 에러발생 : {e}')
+
+    def post_add(self, write_token, write_token_key, url, content, name, title, repeat, index, sub_index):
+        try:
+            sub_path = get_sub_path(url)
+            menu_url = f'/{sub_path}/'
+            board_code = get_board_value(url)
+            host = get_base_domain(url)
+            full_base_url = get_full_base_domain(url)
+            post_url = f'{full_base_url}/backpg/post_add.cm'
+
+            request_data = {
+                'idx': '0',
+                'menu_url': menu_url,
+                'back_url': '',
+                'back_page_num': '',
+                'board_code': board_code,
+                'body': content,
+                'plain_body': '',
+                'is_editor': 'Y',
+                'represent_img': '',
+                'img': '',
+                'img_tmp_no': '',
+                'is_notice': 'no',
+                'category_type': '1',
+                'write_token': write_token,
+                'write_token_key': write_token_key,
+                'is_secret_post': 'no',
+                'nick': name,
+                'secret_pass': '14143651',
+                'subject': title
+            }
+
+            # 헤더 설정
+            post_client_token_headers = {
+                "accept": "application/json, text/javascript, */*; q=0.01",
+                "accept-encoding": "gzip, deflate, br, zstd",
+                "accept-language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+                "origin": full_base_url,
+                "referer": url,
+                'sec-ch-ua': '"Whale";v="3", "Not-A.Brand";v="8", "Chromium";v="126"',
+                "sec-ch-ua-mobile": "?0",
+                'sec-ch-ua-platform': '"Windows"',
+                "sec-fetch-dest": "empty",
+                "sec-fetch-mode": "cors",
+                "sec-fetch-site": "same-origin",
+                "x-requested-with": "XMLHttpRequest",
+                "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Whale/3.28.266.14 Safari/537.36",
+                "cache-control": "max-age=0",
+                "content-type": "application/x-www-form-urlencoded",
+                "upgrade-insecure-requests": "1"
+            }
+
+            # 클라이언트를 통해 HTTP/2 요청 수행
+            response = self.client.post(post_url, data=request_data, headers=post_client_token_headers, timeout=10)
+
+            # 응답 내용 처리
+            escaped_text = response.text.replace("<", "&lt;").replace(">", "&gt;")
+            if response.status_code == 200:
+                self.log_updated.emit(
+                    f'[Index:{repeat + 1}_{index + 1}_{sub_index + 1}] [STEP] [3] [글작성] [성공] [응답 : {response.status_code}] [내용 : {escaped_text}]')
+                return True
+            else:
+                self.log_updated.emit(
+                    f'[Index:{repeat + 1}_{index + 1}_{sub_index + 1}] [STEP] [3] [글작성] [실패] [응답 : {response.status_code}] [내용 : {escaped_text}]')
+                return False
+        except Exception as e:
+            self.log_updated.emit(f'[Index:{repeat + 1}_{index + 1}_{sub_index + 1}] [STEP] [3] 에러발생 : {e}')
+            return False
+
     def write_contents(self, url, name, title, content, repeat, index, sub_index):
         try:
             base_url = extract_base_url(url)
-            domail_url = get_domain(url)
 
             # 첫번째만 크롬으로 url 이동
             if sub_index == 0:
-                self.driver.get(base_url)
-                write_button_selector = "div.btn-block-right > a"
-                wait = WebDriverWait(self.driver, 10)  # 최대 10초 대기
-                write_button_element = wait.until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, write_button_selector)))
-
-                # 스크롤을 시도하면서 클릭 가능한지 반복 확인
-                is_clicked = False
-                attempts = 0
-
-                while not is_clicked and attempts < 5:  # 최대 5번 시도
-                    try:
-                        # 스크롤 시도
-                        self.driver.execute_script("arguments[0].scrollIntoView();", write_button_element)
-                        write_button_element = wait.until(
-                            EC.element_to_be_clickable((By.CSS_SELECTOR, write_button_selector)))
-                        self.driver.execute_script("arguments[0].click();", write_button_element)
-                        is_clicked = True  # 성공적으로 클릭되면 반복 중단
-                    except Exception as e:
-                        attempts += 1
-                        self.log_updated.emit(f"[스크롤 시도 {attempts}] 요소를 찾지 못했습니다. 오류: {str(e)}")
-                        time.sleep(1)  # 다음 시도 전 대기
+                self.driver.get(url)
+                # write_button_selector = "div.btn-block-right > a"
+                # wait = WebDriverWait(self.driver, 10)  # 최대 10초 대기
+                # write_button_element = wait.until(
+                #     EC.presence_of_element_located((By.CSS_SELECTOR, write_button_selector)))
+                #
+                # # 스크롤을 시도하면서 클릭 가능한지 반복 확인
+                # is_clicked = False
+                # attempts = 0
+                #
+                # while not is_clicked and attempts < 5:  # 최대 5번 시도
+                #     try:
+                #         # 스크롤 시도
+                #         self.driver.execute_script("arguments[0].scrollIntoView();", write_button_element)
+                #         write_button_element = wait.until(
+                #             EC.element_to_be_clickable((By.CSS_SELECTOR, write_button_selector)))
+                #         self.driver.execute_script("arguments[0].click();", write_button_element)
+                #         is_clicked = True  # 성공적으로 클릭되면 반복 중단
+                #     except Exception as e:
+                #         attempts += 1
+                #         self.log_updated.emit(f"[스크롤 시도 {attempts}] 요소를 찾지 못했습니다. 오류: {str(e)}")
+                #         time.sleep(1)  # 다음 시도 전 대기
                 # 세션 저장 후 글쓰기 필요
                 time.sleep(3)
 
@@ -561,6 +734,40 @@ class Worker(QThread):
         except Exception as e:
             print_with_debug(e)
             return False
+
+    def write_contents_for_cloud_flare(self, url, name, title, content, repeat, index, sub_index):
+        try:
+            if sub_index > 0:
+                self.cleanup_browser()
+
+            # 새로운 브라우저 실행 및 연결
+            debugging_port = 9222
+            user_data_dir = r"C:\chrome_temp"
+            self.start_browser_with_subprocess(url, user_data_dir, debugging_port)
+            self.connect_to_existing_browser(debugging_port)
+            self.save_cookies_for_cloud_flare(url, repeat, index, sub_index)
+            self.check_post_client_token_for_cloud_flare(url, repeat, index, sub_index)
+            return self.post_add_for_cloud_flare(url, content, name, title, repeat, index, sub_index)
+
+        except Exception as e:
+            print_with_debug(e)
+            return False
+
+    def cleanup_browser(self):
+        """
+        기존 브라우저와 드라이버를 종료합니다.
+        """
+        try:
+            if hasattr(self, "driver") and self.driver:
+                self.driver.quit()  # Selenium WebDriver 종료
+                self.driver = None
+            # subprocess로 실행된 Chrome 프로세스 종료
+            import psutil
+            for proc in psutil.process_iter(['pid', 'name']):
+                if proc.info['name'] == 'chrome.exe':
+                    proc.terminate()
+        except Exception as e:
+            print(f"Error during cleanup: {e}")
 
     def check_current_ip(self):
         try:
@@ -624,26 +831,21 @@ class Worker(QThread):
             self.log_updated.emit(f'[Index:{repeat + 1}_{index + 1}_{sub_index + 1}] [STEP] [1] 에러발생 : {e}')
             return None, None
 
-    def check_post_client_token(self, url, repeat, index, sub_index):
+    def check_post_client_token_for_cloud_flare(self, url, repeat, index, sub_index):
         try:
             host = get_base_domain(url)
             full_base_url = get_full_base_domain(url)
             post_client_token_url = f'{full_base_url}/set_post_client_token.cm'
 
-            # 브라우저와 일치하도록 설정한 헤더
+            cookie_header = "; ".join([f"{cookie['name']}={cookie['value']}" for cookie in self.driver.get_cookies()])
+
             post_client_token_headers = {
+                "Cookie": cookie_header,
                 "accept": "application/json, text/javascript, */*; q=0.01",
                 "accept-encoding": "gzip, deflate, br, zstd",
                 "accept-language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
                 "origin": full_base_url,
                 "referer": url,
-                'sec-ch-ua': '"Whale";v="3", "Not-A.Brand";v="8", "Chromium";v="126"',
-                "sec-ch-ua-mobile": "?0",
-                'sec-ch-ua-platform': '"Windows"',
-                "sec-fetch-dest": "empty",
-                "sec-fetch-mode": "cors",
-                "sec-fetch-site": "same-origin",
-                "x-requested-with": "XMLHttpRequest",
                 "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Whale/3.28.266.14 Safari/537.36"
             }
 
@@ -661,7 +863,7 @@ class Worker(QThread):
         except Exception as e:
             self.log_updated.emit(f'[Index:{repeat + 1}_{index + 1}_{sub_index + 1}] [STEP] [2] 에러발생 : {e}')
 
-    def post_add(self, write_token, write_token_key, url, content, name, title, repeat, index, sub_index):
+    def post_add_for_cloud_flare(self, url, content, name, title, repeat, index, sub_index):
         try:
             sub_path = get_sub_path(url)
             menu_url = f'/{sub_path}/'
@@ -670,7 +872,16 @@ class Worker(QThread):
             full_base_url = get_full_base_domain(url)
             post_url = f'{full_base_url}/backpg/post_add.cm'
 
+            # # write_token 및 write_token_key 추출
+            write_token = self.driver.find_element(By.CSS_SELECTOR, 'input[name="write_token"]').get_attribute("value")
+            write_token_key = self.driver.find_element(By.CSS_SELECTOR, 'input[name="write_token_key"]').get_attribute(
+                "value")
+
+            cf_turnstile_response = self.driver.find_element(By.CSS_SELECTOR, 'input[name="cf-turnstile-response"]').get_attribute(
+                "value")
+
             request_data = {
+                'cf-turnstile-response': cf_turnstile_response,
                 'idx': '0',
                 'menu_url': menu_url,
                 'back_url': '',
@@ -683,39 +894,38 @@ class Worker(QThread):
                 'img': '',
                 'img_tmp_no': '',
                 'is_notice': 'no',
-                'category_type': '1',
+                'category_type': '0',
                 'write_token': write_token,
                 'write_token_key': write_token_key,
                 'is_secret_post': 'no',
                 'nick': name,
-                'secret_pass': '14143651',
+                'secret_pass': 'sdggs',
                 'subject': title
             }
 
-            # 헤더 설정
+            cookie_header = "; ".join([f"{cookie['name']}={cookie['value']}" for cookie in self.driver.get_cookies()])
+            encoded_payload = urllib.parse.urlencode(request_data)
+            content_length = len(encoded_payload.encode("utf-8"))
             post_client_token_headers = {
+                "Cookie": cookie_header,
                 "accept": "application/json, text/javascript, */*; q=0.01",
                 "accept-encoding": "gzip, deflate, br, zstd",
                 "accept-language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
-                "origin": full_base_url,
-                "referer": url,
-                'sec-ch-ua': '"Whale";v="3", "Not-A.Brand";v="8", "Chromium";v="126"',
+                "Referer": url,
+                "Origin": full_base_url,
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Whale/3.28.266.14 Safari/537.36",
+                "content-type": "application/x-www-form-urlencoded",
+                "x-requested-with": "XMLHttpRequest",
+                "sec-ch-ua": '"Whale";v="3", "Not-A.Brand";v="8", "Chromium";v="128"',
                 "sec-ch-ua-mobile": "?0",
-                'sec-ch-ua-platform': '"Windows"',
+                "sec-ch-ua-platform": '"Windows"',
                 "sec-fetch-dest": "empty",
                 "sec-fetch-mode": "cors",
                 "sec-fetch-site": "same-origin",
-                "x-requested-with": "XMLHttpRequest",
-                "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Whale/3.28.266.14 Safari/537.36",
-                "cache-control": "max-age=0",
-                "content-type": "application/x-www-form-urlencoded",
-                "upgrade-insecure-requests": "1"
             }
 
             # 클라이언트를 통해 HTTP/2 요청 수행
             response = self.client.post(post_url, data=request_data, headers=post_client_token_headers, timeout=10)
-
-            # 응답 내용 처리
             escaped_text = response.text.replace("<", "&lt;").replace(">", "&gt;")
             if response.status_code == 200:
                 self.log_updated.emit(f'[Index:{repeat + 1}_{index + 1}_{sub_index + 1}] [STEP] [3] [글작성] [성공] [응답 : {response.status_code}] [내용 : {escaped_text}]')
@@ -745,7 +955,6 @@ class Worker(QThread):
             for option in options_list:
                 chrome_options.add_argument(option)
 
-            #chrome_options.add_argument(f'user-agent={generate_random_user_agent()}')
             chrome_options.add_argument("--disable-blink-features=AutomationControlled")
             chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
             chrome_options.add_experimental_option("useAutomationExtension", False)
@@ -759,7 +968,8 @@ class Worker(QThread):
     def run(self):
         for k in range(self.repeat):
             try:
-                self.init_driver()
+                if not self.use_chrome:
+                    self.init_driver()
                 self.log_updated.emit(f'{k + 1}번째 반복 실행')
                 for i, entry in enumerate(self.entries):
                     try:
@@ -820,7 +1030,7 @@ class MainWindow(QMainWindow):
             self.tab_input = QLineEdit()
             self.convert_checkbox = QCheckBox('특수문자 치환')
             self.use_proxy_checkbox = QCheckBox('프록시 사용')
-            self.use_chrome_checkbox = QCheckBox('크롬으로 실행')
+            self.use_chrome_checkbox = QCheckBox('클라우드 플레어 우회')
             self.use_secret_checkbox = QCheckBox('크롬 프로필 복사')
             name_language_label = QLabel('이름 언어')
             self.name_language_combo_box = QComboBox()
