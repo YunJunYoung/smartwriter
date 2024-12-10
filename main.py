@@ -15,6 +15,7 @@ import capsolver
 import httpx
 import subprocess
 import psutil
+import pyautogui
 
 
 from fake_useragent import UserAgent
@@ -415,7 +416,7 @@ class Worker(QThread):
     api_count_updated = pyqtSignal(int)
 
     def __init__(self, entries, writing_delay, overall_delay, repeat, convert, excel_file_list, name_language,
-                 num_tabs, use_proxy, use_chrome):
+                 num_tabs, use_proxy, use_chrome, x_pos, y_pos):
         super().__init__()
         try:
             self.entries = entries
@@ -437,6 +438,8 @@ class Worker(QThread):
             self.driver = None
             self.session = None
             self.use_chrome = use_chrome
+            self.x_pos = x_pos
+            self.y_pos = y_pos
         except Exception as e:
             print_with_debug(e)
 
@@ -525,22 +528,35 @@ class Worker(QThread):
             self.log_updated.emit(f"[Index:{repeat + 1}_{index + 1}_{sub_index + 1}] [STEP] [0] 에러발생 : {e}")
 
     def start_browser_with_subprocess(self, url, user_data_dir, debugging_port=9222):
-        """Subprocess로 Chrome 실행 및 인증"""
-        subprocess.Popen([
-            chrome_path,
-            f"--remote-debugging-port={debugging_port}",
-            f"--user-data-dir={user_data_dir}",
-            url
-        ])
+       try:
+           """Subprocess로 Chrome 실행 및 인증"""
+           subprocess.Popen([
+               chrome_path,
+               f"--remote-debugging-port={debugging_port}",
+               "--no-first-run",
+               "--no-default-browser-check",
+               "--lang=ko-KR",  # 한국어 설정
+               "--start-maximized",
+               url
+           ])
 
-        # 브라우저 인증을 위한 시간 대기
-        time.sleep(1)  # 수동 인증을 완료할 시간
+           # 브라우저 인증을 위한 시간 대기
+           time.sleep(5)  # 수동 인증을 완료할 시간
+           pyautogui.click(self.x_pos, self.y_pos, duration=0.5)
+           time.sleep(1)  # 수동 인증을 완료할 시간
+
+       except Exception as e:
+           self.log_updated.emit(e)
 
     def connect_to_existing_browser(self, debugging_port=9222):
         """Selenium으로 인증된 브라우저 세션에 연결"""
-        chrome_options = Options()
-        chrome_options.add_experimental_option("debuggerAddress", f"127.0.0.1:{debugging_port}")
-        self.driver = webdriver.Chrome(options=chrome_options)
+        try:
+            chrome_options = Options()
+            chrome_options.add_experimental_option("debuggerAddress", f"127.0.0.1:{debugging_port}")
+            self.driver = webdriver.Chrome(options=chrome_options)
+            self.log_updated.emit('크롬실행. 연결 완료')
+        except Exception as e:
+            self.log_updated.emit(e)
 
     def _set_value_with_javascript(self, driver, element, text):
         try:
@@ -737,17 +753,16 @@ class Worker(QThread):
 
     def write_contents_for_cloud_flare(self, url, name, title, content, repeat, index, sub_index):
         try:
-            if sub_index > 0:
-                self.cleanup_browser()
-
             # 새로운 브라우저 실행 및 연결
             debugging_port = 9222
-            user_data_dir = r"C:\chrome_temp"
+            user_data_dir = r"D:\chrome_temp"
             self.start_browser_with_subprocess(url, user_data_dir, debugging_port)
             self.connect_to_existing_browser(debugging_port)
             self.save_cookies_for_cloud_flare(url, repeat, index, sub_index)
             self.check_post_client_token_for_cloud_flare(url, repeat, index, sub_index)
-            return self.post_add_for_cloud_flare(url, content, name, title, repeat, index, sub_index)
+            ret = self.post_add_for_cloud_flare(url, content, name, title, repeat, index, sub_index)
+            self.cleanup_browser()
+            return ret
 
         except Exception as e:
             print_with_debug(e)
@@ -755,19 +770,19 @@ class Worker(QThread):
 
     def cleanup_browser(self):
         """
-        기존 브라우저와 드라이버를 종료합니다.
+        브라우저 종료를 개선하여 비정상 종료 메시지를 방지
         """
+        # 1. Selenium WebDriver 종료
+        if hasattr(self, "driver") and self.driver:
+            self.driver.quit()
+            self.driver = None
         try:
-            if hasattr(self, "driver") and self.driver:
-                self.driver.quit()  # Selenium WebDriver 종료
-                self.driver = None
-            # subprocess로 실행된 Chrome 프로세스 종료
-            import psutil
             for proc in psutil.process_iter(['pid', 'name']):
                 if proc.info['name'] == 'chrome.exe':
-                    proc.terminate()
+                    proc.terminate()  # 하위 프로세스도 종료
+                    proc.wait(timeout=5)
         except Exception as e:
-            print(f"Error during cleanup: {e}")
+            print(f"Error during Chrome and children termination: {e}")
 
     def check_current_ip(self):
         try:
@@ -1028,6 +1043,10 @@ class MainWindow(QMainWindow):
             self.repeat_input = QLineEdit()
             tab_label = QLabel('사이트당 게시물 작성 회수')
             self.tab_input = QLineEdit()
+            x_pos_label = QLabel('클플 X 좌표')
+            self.x_pos_input = QLineEdit()
+            y_pos_label = QLabel('클플 Y 좌표')
+            self.y_pos_input = QLineEdit()
             self.convert_checkbox = QCheckBox('특수문자 치환')
             self.use_proxy_checkbox = QCheckBox('프록시 사용')
             self.use_chrome_checkbox = QCheckBox('클라우드 플레어 우회')
@@ -1054,6 +1073,10 @@ class MainWindow(QMainWindow):
             delay_layout.addWidget(self.repeat_input)
             delay_layout.addWidget(tab_label)
             delay_layout.addWidget(self.tab_input)
+            delay_layout.addWidget(x_pos_label)
+            delay_layout.addWidget(self.x_pos_input)
+            delay_layout.addWidget(y_pos_label)
+            delay_layout.addWidget(self.y_pos_input)
             delay_layout.addWidget(self.convert_checkbox)
             delay_layout.addWidget(self.use_proxy_checkbox)
             delay_layout.addWidget(self.use_chrome_checkbox)
@@ -1081,8 +1104,7 @@ class MainWindow(QMainWindow):
             self.url_table_widget.setHorizontalHeaderLabels(['URL'])
             self.url_table_widget.setSelectionBehavior(QTableWidget.SelectRows)
             self.url_table_widget.setSelectionMode(QTableWidget.ExtendedSelection)
-            self.url_table_widget.setColumnWidth(0, 800)
-            self.url_table_widget.setColumnWidth(1, 100)
+            self.url_table_widget.setColumnWidth(0, 1200)
             self.url_table_widget.verticalHeader().setVisible(False)
 
             # 마지막에 이 코드를 추가하여 URL 열이 나머지 너비를 차지하도록 설정합니다.
@@ -1245,7 +1267,9 @@ class MainWindow(QMainWindow):
             'writing_delay': self.writing_delay_input.text(),
             'overall_delay': self.overall_delay_input.text(),
             'repeat': self.repeat_input.text(),
-            'tab': self.tab_input.text()
+            'tab': self.tab_input.text(),
+            'xpos': self.x_pos_input.text(),
+            'ypos': self.y_pos_input.text()
         }
         with open('settings.json', 'w') as f:
             json.dump(settings, f)
@@ -1258,6 +1282,8 @@ class MainWindow(QMainWindow):
                 self.overall_delay_input.setText(settings.get('overall_delay', ''))
                 self.repeat_input.setText(settings.get('repeat', ''))
                 self.tab_input.setText(settings.get('tab', ''))
+                self.x_pos_input.setText(settings.get('xpos', ''))
+                self.y_pos_input.setText(settings.get('ypos', ''))
         except Exception as e:
             print_with_debug(e)
 
@@ -1318,7 +1344,7 @@ class MainWindow(QMainWindow):
         self.progress_bar.setMaximum(len(entries))
         self.worker = Worker(entries, int(self.writing_delay_input.text()), int(self.overall_delay_input.text()),
                              int(self.repeat_input.text()), self.convert_checkbox.isChecked(), self.getFileList(),
-                             self.name_language_combo_box.currentText(), int(self.tab_input.text()), self.use_proxy_checkbox.isChecked(), self.use_chrome_checkbox.isChecked())
+                             self.name_language_combo_box.currentText(), int(self.tab_input.text()), self.use_proxy_checkbox.isChecked(), self.use_chrome_checkbox.isChecked(),int(self.x_pos_input.text()), int(self.y_pos_input.text()) )
         self.worker.progress_updated.connect(self.update_progress)
         self.worker.log_updated.connect(self.add_log)
         self.worker.start()
