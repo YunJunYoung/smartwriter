@@ -13,10 +13,6 @@ import threading
 import numpy as np
 import capsolver
 import httpx
-import subprocess
-import psutil
-import pyautogui
-
 
 from fake_useragent import UserAgent
 from urllib.parse import urlparse, parse_qs
@@ -46,8 +42,7 @@ from PyQt5 import QtWidgets as qtw
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from selenium.common.exceptions import TimeoutException
 
-#from selenium import webdriver
-from seleniumwire import webdriver  # Selenium Wire 사용
+from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.common.exceptions import UnexpectedAlertPresentException
 from selenium.common.exceptions import NoSuchElementException
@@ -82,14 +77,14 @@ ip_check_url = "https://httpbin.org/ip"
 # 접속 테스트할 일반 웹사이트 URL
 test_site = "https://www.google.com"
 
-chrome_config_path = "chrome_config.json"
-with open(chrome_config_path, "r") as file:
-    config = json.load(file)
-
-# 크롬 실행 경로 가져오기
-chrome_path = config.get("chrome_path")
-if not chrome_path:
-    raise FileNotFoundError("Chrome 실행 경로가 JSON 파일에 지정되지 않았습니다.")
+def get_random_prefix(file_path):
+    """파일에서 개행을 기준으로 랜덤 단어를 선택"""
+    if os.path.exists(file_path):
+        with open(file_path, "r", encoding="utf-8") as f:
+            lines = [line.strip() for line in f.readlines() if line.strip()]
+        if lines:
+            return random.choice(lines) + " "  # 선택된 단어 뒤에 공백 추가
+    return ""
 
 def get_base_domain(url):
     parsed_url = urlparse(url)
@@ -122,6 +117,27 @@ def get_board_value(url):
         return query_params['board'][0]
     else:
         return None
+
+
+def check_ip_without_proxy():
+    try:
+        response = requests.get(ip_check_url)
+        ip = response.json()["origin"]
+        print(f"Without Proxy IP (Alternative): {ip}")
+    except Exception as e:
+        print(f"Error without proxy: {e}")
+
+# 프록시 적용 후 IP 확인
+def check_ip_with_proxy(proxies):
+    try:
+        response = requests.get(ip_check_url, proxies=proxies)
+        ip = response.json()["origin"]
+        print(f"With Proxy IP: {ip}")
+    except Exception as e:
+        print(f"Error with proxy: {e}")
+
+def utc_to_kst(utc_time):
+    return utc_time + datetime.timedelta(hours=9)
 
 def download_and_extract_zip(url, extract_to):
     headers = {
@@ -341,6 +357,26 @@ def text_to_html(text):
         print_with_debug(e)
 
 
+def generate_korean_phone_number():
+    # 010-으로 시작
+    phone_number = "010-"
+
+    # 중간 4자리 숫자 생성
+    middle_four_digits = ''.join([str(random.randint(0, 9)) for _ in range(4)])
+
+    # 마지막 4자리 숫자 생성
+    last_four_digits = ''.join([str(random.randint(0, 9)) for _ in range(4)])
+
+    # 전체 전화번호 조합
+    phone_number += f"{middle_four_digits}-{last_four_digits}"
+
+    return phone_number
+
+
+api_key = '37f1af7f0d286cd9ad65892446c64ab7'
+solver = TwoCaptcha(api_key, defaultTimeout=30, pollingInterval=5)
+
+
 def print_with_debug(msg):
     print(msg)
     traceback.print_exc()
@@ -353,6 +389,14 @@ def get_center_position(width, height):
     y = int((screen_geometry.height() - height) / 2 + screen_geometry.top())
     return x, y
 
+
+def read_data_from_file(filename):
+    try:
+        with open(filename, 'r') as file:
+            data = json.load(file)
+            return data.get('title', ''), data.get('content', '')
+    except (FileNotFoundError, json.JSONDecodeError):
+        return '', ''
 
 class ExcelRandomPicker:
     def __init__(self, excel_file_list):
@@ -416,7 +460,7 @@ class Worker(QThread):
     api_count_updated = pyqtSignal(int)
 
     def __init__(self, entries, writing_delay, overall_delay, repeat, convert, excel_file_list, name_language,
-                 num_tabs, use_proxy, use_chrome, x_pos, y_pos):
+                 num_tabs, use_proxy, use_chrome):
         super().__init__()
         try:
             self.entries = entries
@@ -437,11 +481,20 @@ class Worker(QThread):
             self.temp_profiles = []
             self.driver = None
             self.session = None
-            self.use_chrome = use_chrome
-            self.x_pos = x_pos
-            self.y_pos = y_pos
         except Exception as e:
             print_with_debug(e)
+
+    def _set_value_with_javascript(self, element, text):
+        try:
+            # JavaScript를 사용하여 값을 설정하고 입력 이벤트를 트리거합니다.
+            self.driver.execute_script("""
+            arguments[0].value = arguments[1];
+            arguments[0].dispatchEvent(new Event('input', { bubbles: true }));
+            arguments[0].dispatchEvent(new Event('change', { bubbles: true }));
+            """, element, text)
+
+        except Exception as e:
+            print(f"Error: {e}")
 
     def get_name(self, name_language):
         if name_language == '한글':
@@ -479,6 +532,13 @@ class Worker(QThread):
             content = str(content)
             name = self.get_name(name[1:])
 
+            # pre_title.txt와 pre_name.txt에서 랜덤 단어 추가
+            title_prefix = get_random_prefix("pre_title.txt")
+            name_prefix = get_random_prefix("pre_name.txt")
+
+            title = title_prefix + title  # 타이틀에 랜덤 접두어 추가
+            name = name_prefix + name  # 이름에 랜덤 접두어 추가
+
             if is_file_name(content):
                 text_content = read_whole_text(content)
                 content = text_to_html(text_content)
@@ -491,10 +551,7 @@ class Worker(QThread):
             else:
                 edit_content = f"<p>{content}</p>"
 
-            if self.use_chrome:
-                ret = self.write_contents_for_cloud_flare(url, name, title, edit_content, repeat, index, sub_index)
-            else:
-                ret = self.write_contents(url, name, title, edit_content, repeat, index, sub_index)
+            ret = self.write_contents(url, name, title, edit_content, repeat, index, sub_index)
             self.write_index += 1
 
             if ret:
@@ -506,69 +563,6 @@ class Worker(QThread):
             print_with_debug(e)
             self.log_updated.emit(f'[Index:{repeat + 1}_{index + 1}_{sub_index+1}] [{url}] 글쓰기 실패')
             return False
-
-    def save_cookies_for_cloud_flare(self, url, repeat, index, sub_index):
-        try:
-            full_base_url = get_full_base_domain(url)
-            # 프록시 설정을 초기화 시점에 설정
-            proxies = None
-            if self.use_proxy:
-                proxy_ip = get_proxy_ip()
-                proxy_host, proxy_port = proxy_ip.split(":")[0], proxy_ip.split(":")[1]
-                proxy = f'http://{PROXY_USERNAME}:{PROXY_PASSWORD}@{proxy_host}:{proxy_port}'
-                proxies = {
-                    'http://': proxy,
-                    'https://': proxy
-                }
-
-            # HTTP/2 지원을 위해 httpx 클라이언트 초기화 시 프록시 설정 포함
-            self.client = httpx.Client(http2=True, proxies=proxies)
-            self.log_updated.emit(f"[Index:{repeat + 1}_{index + 1}_{sub_index + 1}] [STEP] [0] [세션 정보 획득 성공]")
-        except Exception as e:
-            self.log_updated.emit(f"[Index:{repeat + 1}_{index + 1}_{sub_index + 1}] [STEP] [0] 에러발생 : {e}")
-
-    def start_browser_with_subprocess(self, url, user_data_dir, debugging_port=9222):
-       try:
-           """Subprocess로 Chrome 실행 및 인증"""
-           subprocess.Popen([
-               chrome_path,
-               f"--remote-debugging-port={debugging_port}",
-               "--no-first-run",
-               "--no-default-browser-check",
-               "--lang=ko-KR",  # 한국어 설정
-               "--start-maximized",
-               url
-           ])
-
-           # 브라우저 인증을 위한 시간 대기
-           time.sleep(5)  # 수동 인증을 완료할 시간
-           pyautogui.click(self.x_pos, self.y_pos, duration=0.5)
-           time.sleep(1)  # 수동 인증을 완료할 시간
-
-       except Exception as e:
-           self.log_updated.emit(e)
-
-    def connect_to_existing_browser(self, debugging_port=9222):
-        """Selenium으로 인증된 브라우저 세션에 연결"""
-        try:
-            chrome_options = Options()
-            chrome_options.add_experimental_option("debuggerAddress", f"127.0.0.1:{debugging_port}")
-            self.driver = webdriver.Chrome(options=chrome_options)
-            self.log_updated.emit('크롬실행. 연결 완료')
-        except Exception as e:
-            self.log_updated.emit(e)
-
-    def _set_value_with_javascript(self, driver, element, text):
-        try:
-            # JavaScript를 사용하여 값을 설정하고 입력 이벤트를 트리거합니다.
-            driver.execute_script("""
-            arguments[0].value = arguments[1];
-            arguments[0].dispatchEvent(new Event('input', { bubbles: true }));
-            arguments[0].dispatchEvent(new Event('change', { bubbles: true }));
-            """, element, text)
-            time.sleep(0.1)
-        except Exception as e:
-            print(f"Error: {e}")
 
     def save_cookies(self, url, repeat, index, sub_index):
         try:
@@ -603,143 +597,9 @@ class Worker(QThread):
         except Exception as e:
             self.log_updated.emit(f"[Index:{repeat + 1}_{index + 1}_{sub_index + 1}] [STEP] [0] 에러발생 : {e}")
 
-    def check_post_client_token(self, url, repeat, index, sub_index):
-        try:
-            host = get_base_domain(url)
-            full_base_url = get_full_base_domain(url)
-            post_client_token_url = f'{full_base_url}/set_post_client_token.cm'
-
-            # 브라우저와 일치하도록 설정한 헤더
-            post_client_token_headers = {
-                "accept": "application/json, text/javascript, */*; q=0.01",
-                "accept-encoding": "gzip, deflate, br, zstd",
-                "accept-language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
-                "origin": full_base_url,
-                "referer": url,
-                'sec-ch-ua': '"Whale";v="3", "Not-A.Brand";v="8", "Chromium";v="126"',
-                "sec-ch-ua-mobile": "?0",
-                'sec-ch-ua-platform': '"Windows"',
-                "sec-fetch-dest": "empty",
-                "sec-fetch-mode": "cors",
-                "sec-fetch-site": "same-origin",
-                "x-requested-with": "XMLHttpRequest",
-                "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Whale/3.28.266.14 Safari/537.36"
-            }
-
-            # 클라이언트를 통해 HTTP/2 요청 수행
-            response = self.client.post(post_client_token_url, headers=post_client_token_headers, timeout=10)
-
-            # 응답 내용 처리
-            escaped_text = response.text.replace("<", "&lt;").replace(">", "&gt;")
-            if response.status_code == 200:
-                self.log_updated.emit(
-                    f'[Index:{repeat + 1}_{index + 1}_{sub_index + 1}] [STEP] [2] [유효성 검사] [응답 : {response.status_code}] [내용 : {escaped_text}]')
-                return True
-            else:
-                self.log_updated.emit(
-                    f'[Index:{repeat + 1}_{index + 1}_{sub_index + 1}] [STEP] [2] [유효성 검사] [응답 : {response.status_code}] [내용 : {escaped_text}]')
-                return False
-        except Exception as e:
-            self.log_updated.emit(f'[Index:{repeat + 1}_{index + 1}_{sub_index + 1}] [STEP] [2] 에러발생 : {e}')
-
-    def post_add(self, write_token, write_token_key, url, content, name, title, repeat, index, sub_index):
-        try:
-            sub_path = get_sub_path(url)
-            menu_url = f'/{sub_path}/'
-            board_code = get_board_value(url)
-            host = get_base_domain(url)
-            full_base_url = get_full_base_domain(url)
-            post_url = f'{full_base_url}/backpg/post_add.cm'
-
-            request_data = {
-                'idx': '0',
-                'menu_url': menu_url,
-                'back_url': '',
-                'back_page_num': '',
-                'board_code': board_code,
-                'body': content,
-                'plain_body': '',
-                'is_editor': 'Y',
-                'represent_img': '',
-                'img': '',
-                'img_tmp_no': '',
-                'is_notice': 'no',
-                'category_type': '1',
-                'write_token': write_token,
-                'write_token_key': write_token_key,
-                'is_secret_post': 'no',
-                'nick': name,
-                'secret_pass': '14143651',
-                'subject': title
-            }
-
-            # 헤더 설정
-            post_client_token_headers = {
-                "accept": "application/json, text/javascript, */*; q=0.01",
-                "accept-encoding": "gzip, deflate, br, zstd",
-                "accept-language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
-                "origin": full_base_url,
-                "referer": url,
-                'sec-ch-ua': '"Whale";v="3", "Not-A.Brand";v="8", "Chromium";v="126"',
-                "sec-ch-ua-mobile": "?0",
-                'sec-ch-ua-platform': '"Windows"',
-                "sec-fetch-dest": "empty",
-                "sec-fetch-mode": "cors",
-                "sec-fetch-site": "same-origin",
-                "x-requested-with": "XMLHttpRequest",
-                "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Whale/3.28.266.14 Safari/537.36",
-                "cache-control": "max-age=0",
-                "content-type": "application/x-www-form-urlencoded",
-                "upgrade-insecure-requests": "1"
-            }
-
-            # 클라이언트를 통해 HTTP/2 요청 수행
-            response = self.client.post(post_url, data=request_data, headers=post_client_token_headers, timeout=10)
-
-            # 응답 내용 처리
-            escaped_text = response.text.replace("<", "&lt;").replace(">", "&gt;")
-            if response.status_code == 200:
-                self.log_updated.emit(
-                    f'[Index:{repeat + 1}_{index + 1}_{sub_index + 1}] [STEP] [3] [글작성] [성공] [응답 : {response.status_code}] [내용 : {escaped_text}]')
-                return True
-            else:
-                self.log_updated.emit(
-                    f'[Index:{repeat + 1}_{index + 1}_{sub_index + 1}] [STEP] [3] [글작성] [실패] [응답 : {response.status_code}] [내용 : {escaped_text}]')
-                return False
-        except Exception as e:
-            self.log_updated.emit(f'[Index:{repeat + 1}_{index + 1}_{sub_index + 1}] [STEP] [3] 에러발생 : {e}')
-            return False
-
     def write_contents(self, url, name, title, content, repeat, index, sub_index):
         try:
             base_url = extract_base_url(url)
-
-            # 첫번째만 크롬으로 url 이동
-            if sub_index == 0:
-                self.driver.get(url)
-                # write_button_selector = "div.btn-block-right > a"
-                # wait = WebDriverWait(self.driver, 10)  # 최대 10초 대기
-                # write_button_element = wait.until(
-                #     EC.presence_of_element_located((By.CSS_SELECTOR, write_button_selector)))
-                #
-                # # 스크롤을 시도하면서 클릭 가능한지 반복 확인
-                # is_clicked = False
-                # attempts = 0
-                #
-                # while not is_clicked and attempts < 5:  # 최대 5번 시도
-                #     try:
-                #         # 스크롤 시도
-                #         self.driver.execute_script("arguments[0].scrollIntoView();", write_button_element)
-                #         write_button_element = wait.until(
-                #             EC.element_to_be_clickable((By.CSS_SELECTOR, write_button_selector)))
-                #         self.driver.execute_script("arguments[0].click();", write_button_element)
-                #         is_clicked = True  # 성공적으로 클릭되면 반복 중단
-                #     except Exception as e:
-                #         attempts += 1
-                #         self.log_updated.emit(f"[스크롤 시도 {attempts}] 요소를 찾지 못했습니다. 오류: {str(e)}")
-                #         time.sleep(1)  # 다음 시도 전 대기
-                # 세션 저장 후 글쓰기 필요
-                time.sleep(3)
 
             self.save_cookies(url, repeat, index, sub_index)
             time.sleep(1)
@@ -750,39 +610,6 @@ class Worker(QThread):
         except Exception as e:
             print_with_debug(e)
             return False
-
-    def write_contents_for_cloud_flare(self, url, name, title, content, repeat, index, sub_index):
-        try:
-            # 새로운 브라우저 실행 및 연결
-            debugging_port = 9222
-            user_data_dir = r"D:\chrome_temp"
-            self.start_browser_with_subprocess(url, user_data_dir, debugging_port)
-            self.connect_to_existing_browser(debugging_port)
-            self.save_cookies_for_cloud_flare(url, repeat, index, sub_index)
-            self.check_post_client_token_for_cloud_flare(url, repeat, index, sub_index)
-            ret = self.post_add_for_cloud_flare(url, content, name, title, repeat, index, sub_index)
-            self.cleanup_browser()
-            return ret
-
-        except Exception as e:
-            print_with_debug(e)
-            return False
-
-    def cleanup_browser(self):
-        """
-        브라우저 종료를 개선하여 비정상 종료 메시지를 방지
-        """
-        # 1. Selenium WebDriver 종료
-        if hasattr(self, "driver") and self.driver:
-            self.driver.quit()
-            self.driver = None
-        try:
-            for proc in psutil.process_iter(['pid', 'name']):
-                if proc.info['name'] == 'chrome.exe':
-                    proc.terminate()  # 하위 프로세스도 종료
-                    proc.wait(timeout=5)
-        except Exception as e:
-            print(f"Error during Chrome and children termination: {e}")
 
     def check_current_ip(self):
         try:
@@ -846,21 +673,26 @@ class Worker(QThread):
             self.log_updated.emit(f'[Index:{repeat + 1}_{index + 1}_{sub_index + 1}] [STEP] [1] 에러발생 : {e}')
             return None, None
 
-    def check_post_client_token_for_cloud_flare(self, url, repeat, index, sub_index):
+    def check_post_client_token(self, url, repeat, index, sub_index):
         try:
             host = get_base_domain(url)
             full_base_url = get_full_base_domain(url)
             post_client_token_url = f'{full_base_url}/set_post_client_token.cm'
 
-            cookie_header = "; ".join([f"{cookie['name']}={cookie['value']}" for cookie in self.driver.get_cookies()])
-
+            # 브라우저와 일치하도록 설정한 헤더
             post_client_token_headers = {
-                "Cookie": cookie_header,
                 "accept": "application/json, text/javascript, */*; q=0.01",
                 "accept-encoding": "gzip, deflate, br, zstd",
                 "accept-language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
                 "origin": full_base_url,
                 "referer": url,
+                'sec-ch-ua': '"Whale";v="3", "Not-A.Brand";v="8", "Chromium";v="126"',
+                "sec-ch-ua-mobile": "?0",
+                'sec-ch-ua-platform': '"Windows"',
+                "sec-fetch-dest": "empty",
+                "sec-fetch-mode": "cors",
+                "sec-fetch-site": "same-origin",
+                "x-requested-with": "XMLHttpRequest",
                 "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Whale/3.28.266.14 Safari/537.36"
             }
 
@@ -878,7 +710,7 @@ class Worker(QThread):
         except Exception as e:
             self.log_updated.emit(f'[Index:{repeat + 1}_{index + 1}_{sub_index + 1}] [STEP] [2] 에러발생 : {e}')
 
-    def post_add_for_cloud_flare(self, url, content, name, title, repeat, index, sub_index):
+    def post_add(self, write_token, write_token_key, url, content, name, title, repeat, index, sub_index):
         try:
             sub_path = get_sub_path(url)
             menu_url = f'/{sub_path}/'
@@ -887,16 +719,7 @@ class Worker(QThread):
             full_base_url = get_full_base_domain(url)
             post_url = f'{full_base_url}/backpg/post_add.cm'
 
-            # # write_token 및 write_token_key 추출
-            write_token = self.driver.find_element(By.CSS_SELECTOR, 'input[name="write_token"]').get_attribute("value")
-            write_token_key = self.driver.find_element(By.CSS_SELECTOR, 'input[name="write_token_key"]').get_attribute(
-                "value")
-
-            cf_turnstile_response = self.driver.find_element(By.CSS_SELECTOR, 'input[name="cf-turnstile-response"]').get_attribute(
-                "value")
-
             request_data = {
-                'cf-turnstile-response': cf_turnstile_response,
                 'idx': '0',
                 'menu_url': menu_url,
                 'back_url': '',
@@ -909,38 +732,39 @@ class Worker(QThread):
                 'img': '',
                 'img_tmp_no': '',
                 'is_notice': 'no',
-                'category_type': '0',
+                'category_type': '1',
                 'write_token': write_token,
                 'write_token_key': write_token_key,
                 'is_secret_post': 'no',
                 'nick': name,
-                'secret_pass': 'sdggs',
+                'secret_pass': '14143651',
                 'subject': title
             }
 
-            cookie_header = "; ".join([f"{cookie['name']}={cookie['value']}" for cookie in self.driver.get_cookies()])
-            encoded_payload = urllib.parse.urlencode(request_data)
-            content_length = len(encoded_payload.encode("utf-8"))
+            # 헤더 설정
             post_client_token_headers = {
-                "Cookie": cookie_header,
                 "accept": "application/json, text/javascript, */*; q=0.01",
                 "accept-encoding": "gzip, deflate, br, zstd",
                 "accept-language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
-                "Referer": url,
-                "Origin": full_base_url,
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Whale/3.28.266.14 Safari/537.36",
-                "content-type": "application/x-www-form-urlencoded",
-                "x-requested-with": "XMLHttpRequest",
-                "sec-ch-ua": '"Whale";v="3", "Not-A.Brand";v="8", "Chromium";v="128"',
+                "origin": full_base_url,
+                "referer": url,
+                'sec-ch-ua': '"Whale";v="3", "Not-A.Brand";v="8", "Chromium";v="126"',
                 "sec-ch-ua-mobile": "?0",
-                "sec-ch-ua-platform": '"Windows"',
+                'sec-ch-ua-platform': '"Windows"',
                 "sec-fetch-dest": "empty",
                 "sec-fetch-mode": "cors",
                 "sec-fetch-site": "same-origin",
+                "x-requested-with": "XMLHttpRequest",
+                "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Whale/3.28.266.14 Safari/537.36",
+                "cache-control": "max-age=0",
+                "content-type": "application/x-www-form-urlencoded",
+                "upgrade-insecure-requests": "1"
             }
 
             # 클라이언트를 통해 HTTP/2 요청 수행
             response = self.client.post(post_url, data=request_data, headers=post_client_token_headers, timeout=10)
+
+            # 응답 내용 처리
             escaped_text = response.text.replace("<", "&lt;").replace(">", "&gt;")
             if response.status_code == 200:
                 self.log_updated.emit(f'[Index:{repeat + 1}_{index + 1}_{sub_index + 1}] [STEP] [3] [글작성] [성공] [응답 : {response.status_code}] [내용 : {escaped_text}]')
@@ -951,6 +775,13 @@ class Worker(QThread):
         except Exception as e:
             self.log_updated.emit(f'[Index:{repeat + 1}_{index + 1}_{sub_index + 1}] [STEP] [3] 에러발생 : {e}')
             return False
+
+    def switch_to_tab(self, index):
+        if 0 <= index < len(self.driver.window_handles):
+            self.driver.switch_to.window(self.driver.window_handles[index])
+            time.sleep(1)
+        else:
+            print(f"인덱스 {index}는 유효하지 않습니다.")
 
     def init_driver(self):
         try:
@@ -970,6 +801,7 @@ class Worker(QThread):
             for option in options_list:
                 chrome_options.add_argument(option)
 
+            #chrome_options.add_argument(f'user-agent={generate_random_user_agent()}')
             chrome_options.add_argument("--disable-blink-features=AutomationControlled")
             chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
             chrome_options.add_experimental_option("useAutomationExtension", False)
@@ -983,8 +815,7 @@ class Worker(QThread):
     def run(self):
         for k in range(self.repeat):
             try:
-                if not self.use_chrome:
-                    self.init_driver()
+                self.init_driver()
                 self.log_updated.emit(f'{k + 1}번째 반복 실행')
                 for i, entry in enumerate(self.entries):
                     try:
@@ -1043,13 +874,9 @@ class MainWindow(QMainWindow):
             self.repeat_input = QLineEdit()
             tab_label = QLabel('사이트당 게시물 작성 회수')
             self.tab_input = QLineEdit()
-            x_pos_label = QLabel('클플 X 좌표')
-            self.x_pos_input = QLineEdit()
-            y_pos_label = QLabel('클플 Y 좌표')
-            self.y_pos_input = QLineEdit()
             self.convert_checkbox = QCheckBox('특수문자 치환')
             self.use_proxy_checkbox = QCheckBox('프록시 사용')
-            self.use_chrome_checkbox = QCheckBox('클라우드 플레어 우회')
+            self.use_chrome_checkbox = QCheckBox('크롬으로 실행')
             self.use_secret_checkbox = QCheckBox('크롬 프로필 복사')
             name_language_label = QLabel('이름 언어')
             self.name_language_combo_box = QComboBox()
@@ -1073,10 +900,6 @@ class MainWindow(QMainWindow):
             delay_layout.addWidget(self.repeat_input)
             delay_layout.addWidget(tab_label)
             delay_layout.addWidget(self.tab_input)
-            delay_layout.addWidget(x_pos_label)
-            delay_layout.addWidget(self.x_pos_input)
-            delay_layout.addWidget(y_pos_label)
-            delay_layout.addWidget(self.y_pos_input)
             delay_layout.addWidget(self.convert_checkbox)
             delay_layout.addWidget(self.use_proxy_checkbox)
             delay_layout.addWidget(self.use_chrome_checkbox)
@@ -1104,7 +927,8 @@ class MainWindow(QMainWindow):
             self.url_table_widget.setHorizontalHeaderLabels(['URL'])
             self.url_table_widget.setSelectionBehavior(QTableWidget.SelectRows)
             self.url_table_widget.setSelectionMode(QTableWidget.ExtendedSelection)
-            self.url_table_widget.setColumnWidth(0, 1200)
+            self.url_table_widget.setColumnWidth(0, 800)
+            self.url_table_widget.setColumnWidth(1, 100)
             self.url_table_widget.verticalHeader().setVisible(False)
 
             # 마지막에 이 코드를 추가하여 URL 열이 나머지 너비를 차지하도록 설정합니다.
@@ -1123,10 +947,12 @@ class MainWindow(QMainWindow):
             main_layout.addLayout(delay_layout)
 
             button_layout = QHBoxLayout()
+            # button_layout.addWidget(self.login_manage_button)
             button_layout.addWidget(self.write_button)
 
             main_layout.addLayout(button_layout)
 
+            self.login_manage_button.clicked.connect(self.on_login_manage_button_click)
             self.write_button.clicked.connect(self.on_write_button_click)
 
             load_excel_button = QPushButton('엑셀 불러오기')
@@ -1267,9 +1093,7 @@ class MainWindow(QMainWindow):
             'writing_delay': self.writing_delay_input.text(),
             'overall_delay': self.overall_delay_input.text(),
             'repeat': self.repeat_input.text(),
-            'tab': self.tab_input.text(),
-            'xpos': self.x_pos_input.text(),
-            'ypos': self.y_pos_input.text()
+            'tab': self.tab_input.text()
         }
         with open('settings.json', 'w') as f:
             json.dump(settings, f)
@@ -1282,8 +1106,6 @@ class MainWindow(QMainWindow):
                 self.overall_delay_input.setText(settings.get('overall_delay', ''))
                 self.repeat_input.setText(settings.get('repeat', ''))
                 self.tab_input.setText(settings.get('tab', ''))
-                self.x_pos_input.setText(settings.get('xpos', ''))
-                self.y_pos_input.setText(settings.get('ypos', ''))
         except Exception as e:
             print_with_debug(e)
 
@@ -1338,13 +1160,20 @@ class MainWindow(QMainWindow):
         except Exception as e:
             print_with_debug(e)
 
+    def on_login_manage_button_click(self):
+        try:
+            self.url_manager = URLManager()
+            self.url_manager.show()
+        except Exception as e:
+            print_with_debug(e)
+
     def on_write_button_click(self):
         self.save_settings()
         entries = self.get_all_entries()
         self.progress_bar.setMaximum(len(entries))
         self.worker = Worker(entries, int(self.writing_delay_input.text()), int(self.overall_delay_input.text()),
                              int(self.repeat_input.text()), self.convert_checkbox.isChecked(), self.getFileList(),
-                             self.name_language_combo_box.currentText(), int(self.tab_input.text()), self.use_proxy_checkbox.isChecked(), self.use_chrome_checkbox.isChecked(),int(self.x_pos_input.text()), int(self.y_pos_input.text()) )
+                             self.name_language_combo_box.currentText(), int(self.tab_input.text()), self.use_proxy_checkbox.isChecked(), self.use_chrome_checkbox.isChecked())
         self.worker.progress_updated.connect(self.update_progress)
         self.worker.log_updated.connect(self.add_log)
         self.worker.start()
@@ -1612,6 +1441,12 @@ class URLManager(QWidget):
             with open('login_urls.json', 'w') as f:
                 json.dump([], f)
 
+
+def convert_cookies(cookies):
+    requests_cookies = {}
+    for cookie in cookies:
+        requests_cookies[cookie['name']] = cookie['value']
+    return requests_cookies
 
 
 if __name__ == "__main__":
