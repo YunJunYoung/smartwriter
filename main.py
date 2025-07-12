@@ -11,7 +11,6 @@ import shutil
 import gc
 import threading
 import numpy as np
-import capsolver
 import httpx
 
 from fake_useragent import UserAgent
@@ -50,7 +49,6 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.support.ui import Select
 import requests
 import time
-from twocaptcha.solver import TwoCaptcha
 import pandas as pd
 import pyperclip
 from selenium.webdriver.common.keys import Keys
@@ -374,7 +372,6 @@ def generate_korean_phone_number():
 
 
 api_key = '37f1af7f0d286cd9ad65892446c64ab7'
-solver = TwoCaptcha(api_key, defaultTimeout=30, pollingInterval=5)
 
 
 def print_with_debug(msg):
@@ -564,6 +561,47 @@ class Worker(QThread):
             self.log_updated.emit(f'[Index:{repeat + 1}_{index + 1}_{sub_index+1}] [{url}] 글쓰기 실패')
             return False
 
+    def auth_oms(self, url):
+        parsed = urlparse(url)
+        base = f"{parsed.scheme}://{parsed.netloc}"
+        auth_url = f"{base}/ajax/oms/OMS_auth.cm"
+
+        headers = {
+            "accept": "application/json, text/plain, */*",
+            "accept-encoding": "gzip, deflate",
+            "accept-language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+            "cache-control": "no-cache",
+            "pragma": "no-cache",
+            "referer": url,
+            "origin": base,
+            "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
+            "x-requested-with": "XMLHttpRequest",
+        }
+
+        # GET 요청으로 인증 쿠키·세션 갱신
+        resp = self.client.get(auth_url, headers=headers)
+        if resp.status_code != 200:
+            self.log_updated.emit(f"[단계 추가] [OMS Auth] 실패: {resp.status_code}")
+        else:
+            self.log_updated.emit(f"[단계 추가] [OMS Auth] 성공")
+
+    def check_proxy_http(self, proxies: dict, timeout: float = 5.0):
+        print(f'proxies : {proxies} in check_proxy_http')
+        test_url = "https://httpbin.org/ip"
+        try:
+            # httpx.get 을 직접 써도 되고, Client 를 재사용해도 됩니다.
+            response = httpx.get(test_url, proxies=proxies, timeout=timeout)
+            if response.status_code == 200:
+                origin = response.json().get("origin", "")
+                self.log_updated.emit(f"[프록시 작동 확인] [성공] [IP]: {origin}")
+                return True
+            else:
+                self.log_updated.emit(f"[프록시 작동 확인] [실패] [상태 코드] : {response.status_code}")
+                return False
+        except Exception as e:
+            print(f"프록시 테스트 중 예외 발생: {e}")
+            return False
+
     def save_cookies(self, url, repeat, index, sub_index):
         try:
             full_base_url = get_full_base_domain(url)
@@ -577,19 +615,28 @@ class Worker(QThread):
                     'http://': proxy,
                     'https://': proxy
                 }
+                self.check_proxy_http(proxies)
+
+            # self.session = requests.Session()
+            # for ck in self.driver.get_cookies():
+            #     self.session.cookies.set(ck['name'], ck['value'], domain=ck.get('domain'))
 
             # HTTP/2 지원을 위해 httpx 클라이언트 초기화 시 프록시 설정 포함
-            self.client = httpx.Client(http2=True, proxies=proxies)
+            if proxies is None:
+                self.client = httpx.Client(http2=True, verify=False)
+            else:
+                self.client = httpx.Client(http2=True, verify=False, proxies=proxies)
 
             # Selenium에서 쿠키 가져오기
             cookies = self.driver.get_cookies()
+            host = urlparse(url).netloc
 
             # 각 쿠키에 domain과 path를 설정하여 httpx 클라이언트에 추가
             for cookie in cookies:
                 self.client.cookies.set(
                     name=cookie['name'],
                     value=cookie['value'],
-                    domain=full_base_url,  # 방문 중인 도메인
+                    domain=host,
                     path=cookie.get('path', '/')
                 )
 
@@ -600,9 +647,29 @@ class Worker(QThread):
     def write_contents(self, url, name, title, content, repeat, index, sub_index):
         try:
             base_url = extract_base_url(url)
+            print(f'base_url : {base_url}')
+            if sub_index == 0:
+                self.driver.get(base_url)
+                time.sleep(1)
+                selector = (
+                    "#w20240416c99993d0240ce > div > div.widget.board._list_wrap "
+                    "> div.li_footer._list_bottom.clearfix.text-center "
+                    "> div.btn-block-right > a"
+                )
+
+                # 최대 10초간 요소가 클릭 가능해질 때까지 대기
+                wait = WebDriverWait(self.driver, 10)
+                button = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, selector)))
+                self.driver.execute_script("arguments[0].scrollIntoView({ block: 'center' });", button)
+
+                # 클릭
+                button.click()
+                time.sleep(1)
 
             self.save_cookies(url, repeat, index, sub_index)
-            time.sleep(1)
+            # time.sleep(1)
+            # self.auth_oms(url)
+            time.sleep(0.5)
             write_token, write_token_key = self.get_make_token(url, repeat, index, sub_index)
             self.check_post_client_token(url, repeat, index, sub_index)
             return self.post_add(write_token, write_token_key, url, content, name, title, repeat, index, sub_index)
@@ -627,50 +694,77 @@ class Worker(QThread):
 
     def get_make_token(self, url, repeat, index, sub_index):
         try:
-            #self.check_current_ip()
-            host = get_base_domain(url)
-            full_base_url = get_full_base_domain(url)
-            make_token_url = f'{full_base_url}/ajax/make_tokens.cm'
+            full_base = get_full_base_domain(url)
+            parsed = urlparse(url)
+            origin = f"{parsed.scheme}://{parsed.netloc}"
 
-            request_data = {
-                'expire': '86400',
-                'count': '1'
-            }
+            # 1) OMS 인증
+            oms_url = f"{origin}/ajax/oms/OMS_auth.cm"
+            self.client.get(
+                oms_url,
+                headers={
+                    "accept": "application/json, text/plain, */*",
+                    "x-requested-with": "XMLHttpRequest",
+                    "origin": origin,
+                    "referer": self.driver.current_url,
+                    "user-agent": self.client.headers.get("user-agent", "")
+                },
+                timeout=10
+            )
 
-            # 브라우저와 일치하도록 설정한 헤더
-            make_tokens_headers = {
+            # 2) 글쓰기 페이지 GET
+            write_page = f"{origin}/bbs/write.php?bo_table={get_board_value(url)}"
+            self.client.get(
+                write_page,
+                headers={
+                    "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    "user-agent": self.client.headers.get("user-agent", ""),
+                    "referer": url,
+                    "cache-control": "no-cache",
+                    "pragma": "no-cache",
+                },
+                timeout=10
+            )
+
+            # 3) 토큰 요청 POST
+            make_token_url = f"{full_base}/ajax/make_tokens.cm"
+            data = {"expire": "86400", "count": "1"}
+            headers = {
                 "accept": "application/json, text/javascript, */*; q=0.01",
-                "accept-encoding": "gzip, deflate, br, zstd",
-                "accept-language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
                 "content-type": "application/x-www-form-urlencoded; charset=UTF-8",
-                "origin": full_base_url,
-                "referer": url,
-                'sec-ch-ua': '"Whale";v="3", "Not-A.Brand";v="8", "Chromium";v="126"',
-                "sec-ch-ua-mobile": "?0",
-                'sec-ch-ua-platform': '"Windows"',
-                "sec-fetch-dest": "empty",
-                "sec-fetch-mode": "cors",
-                "sec-fetch-site": "same-origin",
+                "origin": origin,
+                "referer": write_page,
+                "cache-control": "no-cache",
+                "pragma": "no-cache",
                 "x-requested-with": "XMLHttpRequest",
-                "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Whale/3.28.266.14 Safari/537.36"
+                "user-agent": self.client.headers.get("user-agent", "")
             }
 
-            # 클라이언트 요청 수행
-            response = self.client.post(make_token_url, data=request_data, headers=make_tokens_headers)
-            escaped_text = response.text.replace("<", "&lt;").replace(">", "&gt;")
-            if response.status_code == 200:
-                tokens = response.json()
-                if tokens.get('tokens'):
-                    write_token = tokens['tokens'][0].get('token')
-                    write_token_key = tokens['tokens'][0].get('token_key')
-                    self.log_updated.emit(
-                        f'[Index:{repeat + 1}_{index + 1}_{sub_index + 1}] [STEP] [1] [글작성 토큰] [성공] [token : {write_token}] [key : {write_token_key}]')
-                    return write_token, write_token_key
-            else:
-                self.log_updated.emit(f'[Index:{repeat + 1}_{index + 1}_{sub_index + 1}] [STEP] [1] [글작성 토큰] [실패] [응답 : {response.status_code}] [내용 : {escaped_text}]')
+            response = self.client.post(
+                make_token_url,
+                data=data,
+                headers=headers,
+                timeout=10,
+                follow_redirects=False
+            )
+
+            if response.status_code != 200:
+                self.log_updated.emit(
+                    f"[{repeat + 1}_{index + 1}_{sub_index + 1}] [STEP1 토큰 실패] HTTP {response.status_code}")
                 return None, None
+
+            tokens = response.json().get("tokens", [])
+            if not tokens:
+                self.log_updated.emit(f"[{repeat + 1}_{index + 1}_{sub_index + 1}] [STEP1 토큰 실패] tokens empty")
+                return None, None
+
+            t0 = tokens[0]
+            self.log_updated.emit(
+                f"[{repeat + 1}_{index + 1}_{sub_index + 1}] [STEP1 토큰 성공] token={t0['token']} key={t0['token_key']}")
+            return t0["token"], t0["token_key"]
+
         except Exception as e:
-            self.log_updated.emit(f'[Index:{repeat + 1}_{index + 1}_{sub_index + 1}] [STEP] [1] 에러발생 : {e}')
+            self.log_updated.emit(f"[{repeat + 1}_{index + 1}_{sub_index + 1}] [STEP1 에러] {e}")
             return None, None
 
     def check_post_client_token(self, url, repeat, index, sub_index):
